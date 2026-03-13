@@ -78,15 +78,19 @@ inference-gateway/
 │   │   ├── limiter.go              # Rate limiter interface
 │   │   ├── redis.go                # Redis sliding window impl
 │   │   └── limiter_test.go
+│   ├── database/
+│   │   ├── database.go             # PostgreSQL connection pool
+│   │   ├── migrate.go              # Migration runner (embedded SQL)
+│   │   ├── migrate_test.go
+│   │   └── migrations/             # Embedded SQL migration files
+│   │       ├── 000001_create_models.up.sql
+│   │       ├── 000001_create_models.down.sql
+│   │       ├── 000002_create_api_keys.up.sql
+│   │       └── 000002_create_api_keys.down.sql
 │   └── admin/
 │       ├── handler.go              # Admin API handlers
 │       ├── models.go               # Admin API request/response types
 │       └── handler_test.go
-├── migrations/
-│   ├── 000001_create_models.up.sql
-│   ├── 000001_create_models.down.sql
-│   ├── 000002_create_api_keys.up.sql
-│   └── 000002_create_api_keys.down.sql
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile

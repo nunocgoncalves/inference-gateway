@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
+	"github.com/nunocgoncalves/inference-gateway/internal/database"
 	"github.com/nunocgoncalves/inference-gateway/internal/server"
 )
 
@@ -85,9 +86,50 @@ func runServe() {
 }
 
 func runMigrate() {
-	// Placeholder — will be implemented in Ticket 2.
-	fmt.Fprintln(os.Stderr, "migrate command not yet implemented")
-	os.Exit(1)
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		fmt.Fprintln(os.Stderr, "DATABASE_URL environment variable is required")
+		os.Exit(1)
+	}
+
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: gateway migrate <up|down> [N]")
+		os.Exit(1)
+	}
+
+	direction := os.Args[2]
+
+	switch direction {
+	case "up":
+		fmt.Println("running migrations up...")
+		if err := database.MigrateUp(dbURL); err != nil {
+			fmt.Fprintf(os.Stderr, "migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("migrations completed successfully")
+
+	case "down":
+		steps := 1
+		if len(os.Args) > 3 {
+			if _, err := fmt.Sscanf(os.Args[3], "%d", &steps); err != nil {
+				fmt.Fprintf(os.Stderr, "invalid step count: %s\n", os.Args[3])
+				os.Exit(1)
+			}
+		}
+		fmt.Printf("rolling back %d migration(s)...\n", steps)
+		if err := database.MigrateDown(dbURL, steps); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("rollback completed successfully")
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown migrate direction: %s\n", direction)
+		fmt.Fprintln(os.Stderr, "Usage: gateway migrate <up|down> [N]")
+		os.Exit(1)
+	}
+
+	// Exit after migration — designed for init container usage.
 }
 
 func newLogger(cfg config.LoggingConfig) *slog.Logger {

@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS model_backends;
+DROP TABLE IF EXISTS models;
