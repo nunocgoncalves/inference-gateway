@@ -312,12 +312,14 @@ All admin endpoints are under `/admin/v1/` and require a separate admin API key 
 
 ### 5.8 Model Registry Cache
 
-In-memory cache of the model registry, refreshed periodically (every 30s) from PostgreSQL.
+Redis-backed cache of the model registry, refreshed periodically (every 30s) from PostgreSQL. Because all gateway instances share the same Redis, invalidation is immediately visible across all pods.
 
-- On startup: load all models + backends from DB
-- Every 30s: refresh from DB
-- On admin API mutation: invalidate cache immediately
-- All proxy request reads use `RLock` for zero-contention reads
+- On startup: load all models + backends from PG into Redis
+- Every 30s: refresh from PG into Redis
+- On admin API mutation: invalidate cache immediately (bump version + full reload)
+- On cache miss: read-through to PG and populate Redis
+- TTL on each Redis key: 2x refresh interval (entries survive between refreshes)
+- Multi-instance safe: all pods read from same Redis, no stale local copies
 
 ## 6. Client-Facing API Endpoints
 
@@ -392,7 +394,7 @@ logging:
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Registry in PostgreSQL | Admin API can mutate at runtime without restart | Dynamic model/key management |
-| In-memory cache for registry | Avoid DB round-trip on every request | 30s refresh; admin mutations trigger immediate invalidation |
+| Redis cache for registry | Avoid DB round-trip on every request; shared across all gateway pods | 30s refresh; admin mutations trigger immediate invalidation; read-through on miss |
 | Redis sorted sets for rate limiting | Sliding window is more accurate than fixed window | Prevents burst at window boundaries |
 | `continuous_usage_stats` from vLLM | Live TPM tracking during streaming | Accurate token counting even on client disconnect |
 | 500ms batch flush for TPM | Reduce Redis load during streaming | Good balance of accuracy and performance |
