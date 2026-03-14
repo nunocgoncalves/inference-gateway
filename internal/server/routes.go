@@ -13,7 +13,7 @@ import (
 	gatewaymw "github.com/nunocgoncalves/inference-gateway/internal/middleware"
 )
 
-func newRouter(logger *slog.Logger, m *metrics.Metrics) http.Handler {
+func newRouter(logger *slog.Logger, m *metrics.Metrics, deps *Deps) http.Handler {
 	r := chi.NewRouter()
 
 	// Base middleware — order matters.
@@ -30,16 +30,41 @@ func newRouter(logger *slog.Logger, m *metrics.Metrics) http.Handler {
 		r.Handle("/metrics", promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{}))
 	}
 
-	// OpenAI-compatible endpoints (auth + rate limiting will be added later).
-	r.Route("/v1", func(r chi.Router) {
-		r.Get("/models", notImplementedHandler)
-		r.Post("/chat/completions", notImplementedHandler)
-	})
+	if deps != nil {
+		// OpenAI-compatible endpoints — fully wired.
+		r.Route("/v1", func(r chi.Router) {
+			if deps.AuthStore != nil {
+				r.Use(gatewaymw.Auth(deps.AuthStore, logger))
+			}
+			if deps.Limiter != nil {
+				r.Use(gatewaymw.RateLimit(deps.Limiter, deps.RateLimitCfg, m, logger))
+			}
+			if m != nil {
+				r.Use(gatewaymw.Metrics(m))
+			}
+			r.Get("/models", deps.ProxyHandler.ListModels)
+			r.Post("/chat/completions", deps.ProxyHandler.ChatCompletions)
+		})
 
-	// Admin endpoints (admin auth will be added later).
-	r.Route("/admin/v1", func(r chi.Router) {
-		r.Get("/health", healthHandler)
-	})
+		// Admin endpoints — fully wired.
+		r.Route("/admin/v1", func(r chi.Router) {
+			if deps.AdminKey != "" {
+				r.Use(gatewaymw.AdminAuth(deps.AdminKey, logger))
+			}
+			r.Get("/health", healthHandler)
+			deps.AdminHandler.RegisterRoutes(r)
+			deps.AdminHandler.RegisterKeyRoutes(r)
+		})
+	} else {
+		// Stub mode — no dependencies wired.
+		r.Route("/v1", func(r chi.Router) {
+			r.Get("/models", notImplementedHandler)
+			r.Post("/chat/completions", notImplementedHandler)
+		})
+		r.Route("/admin/v1", func(r chi.Router) {
+			r.Get("/health", healthHandler)
+		})
+	}
 
 	return r
 }

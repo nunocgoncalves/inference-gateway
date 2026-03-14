@@ -7,10 +7,27 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/nunocgoncalves/inference-gateway/internal/admin"
+	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
+	"github.com/nunocgoncalves/inference-gateway/internal/proxy"
+	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 )
+
+// Deps holds all dependencies needed by the server to wire routing.
+// If nil is passed to New, the server runs with stub handlers.
+type Deps struct {
+	ProxyHandler *proxy.Handler
+	AdminHandler *admin.Handler
+	AuthStore    auth.Store
+	Limiter      ratelimit.Limiter
+	RateLimitCfg middleware.RateLimitConfig
+	AdminKey     string
+}
 
 // Server is the main HTTP server for the gateway.
 type Server struct {
@@ -19,11 +36,15 @@ type Server struct {
 	metrics    *metrics.Metrics
 }
 
-// New creates a new Server with the provided configuration. It initialises
-// the Prometheus metrics registry and wires it into the router.
-func New(cfg *config.Config, logger *slog.Logger) *Server {
-	m := metrics.New(prometheus.NewRegistry())
-	router := newRouter(logger, m)
+// New creates a new Server with the provided configuration and dependencies.
+// If deps is nil, the server runs with stub handlers (useful for minimal
+// startup or testing the server package in isolation).
+// If m is nil, a new Prometheus metrics registry is created automatically.
+func New(cfg *config.Config, logger *slog.Logger, deps *Deps, m *metrics.Metrics) *Server {
+	if m == nil {
+		m = metrics.New(prometheus.NewRegistry())
+	}
+	router := newRouter(logger, m, deps)
 
 	return &Server{
 		httpServer: &http.Server{

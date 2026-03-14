@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -8,8 +9,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/nunocgoncalves/inference-gateway/internal/admin"
+	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
 	"github.com/nunocgoncalves/inference-gateway/internal/database"
+	"github.com/nunocgoncalves/inference-gateway/internal/loadbalancer"
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
+	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
+	"github.com/nunocgoncalves/inference-gateway/internal/proxy"
+	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
+	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 	"github.com/nunocgoncalves/inference-gateway/internal/server"
 )
 
@@ -59,8 +71,74 @@ func runServe() {
 	}
 
 	logger := newLogger(cfg.Logging)
+	ctx := context.Background()
 
-	srv := server.New(cfg, logger)
+	// --- Connect to PostgreSQL ---
+	pool, err := database.Connect(ctx, cfg.Database)
+	if err != nil {
+		logger.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+	logger.Info("connected to database")
+
+	// --- Connect to Redis ---
+	redisOpts, err := redis.ParseURL(cfg.Redis.URL)
+	if err != nil {
+		logger.Error("failed to parse redis URL", "error", err)
+		os.Exit(1)
+	}
+	rdb := redis.NewClient(redisOpts)
+	defer rdb.Close()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("connected to redis")
+
+	// --- Create stores ---
+	registryStore := registry.NewPGStore(pool)
+	authStore := auth.NewPGStore(pool)
+
+	// --- Create rate limiter ---
+	limiter := ratelimit.NewRedisLimiter(rdb)
+
+	// --- Create registry cache ---
+	cache := registry.NewCache(registryStore, rdb, logger, cfg.Registry.CacheRefreshInterval)
+	if err := cache.Start(ctx); err != nil {
+		logger.Error("failed to start registry cache", "error", err)
+		os.Exit(1)
+	}
+	defer cache.Stop()
+	logger.Info("registry cache started")
+
+	// --- Create metrics ---
+	m := metrics.New(prometheus.NewRegistry())
+
+	// --- Create health checker ---
+	hc := loadbalancer.NewHealthChecker(loadbalancer.HealthCheckConfig{
+		Interval:           cfg.HealthCheck.Interval,
+		Timeout:            cfg.HealthCheck.Timeout,
+		HealthyThreshold:   cfg.HealthCheck.HealthyThreshold,
+		UnhealthyThreshold: cfg.HealthCheck.UnhealthyThreshold,
+	}, logger, nil, m)
+
+	// --- Create handlers ---
+	proxyHandler := proxy.NewHandler(cache, limiter, hc, m, logger)
+	adminHandler := admin.NewHandler(registryStore, authStore, cache, logger)
+
+	// --- Create server with all deps ---
+	srv := server.New(cfg, logger, &server.Deps{
+		ProxyHandler: proxyHandler,
+		AdminHandler: adminHandler,
+		AuthStore:    authStore,
+		Limiter:      limiter,
+		RateLimitCfg: middleware.RateLimitConfig{
+			DefaultRPM: cfg.RateLimits.DefaultRPM,
+			DefaultTPM: cfg.RateLimits.DefaultTPM,
+		},
+		AdminKey: cfg.Auth.AdminKey,
+	}, m)
 
 	// Start server in a goroutine.
 	errCh := make(chan error, 1)
