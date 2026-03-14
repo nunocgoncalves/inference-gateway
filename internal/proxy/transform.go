@@ -71,7 +71,9 @@ func applyDefaultParams(parsed map[string]any, defaults registry.DefaultParams) 
 // applyReasoningConfig applies reasoning configuration to the request:
 //   - Enabled == nil  → passthrough (no changes)
 //   - Enabled == true → inject reasoning_effort and include_reasoning from config
-//   - Enabled == false → force reasoning off (reasoning_effort:"none", include_reasoning:false)
+//   - Enabled == false → force reasoning off by removing reasoning_effort and
+//     setting include_reasoning to false. The field is deleted rather than set
+//     to a sentinel value because vLLM only accepts "low", "medium", or "high".
 func applyReasoningConfig(parsed map[string]any, cfg registry.ReasoningConfig) {
 	if cfg.Enabled == nil {
 		// Passthrough — don't touch the request.
@@ -87,8 +89,9 @@ func applyReasoningConfig(parsed map[string]any, cfg registry.ReasoningConfig) {
 			parsed["include_reasoning"] = *cfg.IncludeReasoning
 		}
 	} else {
-		// Force reasoning off.
-		parsed["reasoning_effort"] = "none"
+		// Force reasoning off — remove reasoning_effort entirely so vLLM
+		// doesn't receive an unsupported value.
+		delete(parsed, "reasoning_effort")
 		parsed["include_reasoning"] = false
 	}
 }

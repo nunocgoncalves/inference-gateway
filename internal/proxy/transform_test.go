@@ -167,7 +167,8 @@ func TestApplyReasoningConfig_Disable(t *testing.T) {
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(result, &parsed))
-	assert.Equal(t, "none", parsed["reasoning_effort"], "should be forced to none")
+	_, hasReasoningEffort := parsed["reasoning_effort"]
+	assert.False(t, hasReasoningEffort, "reasoning_effort should be removed entirely")
 	assert.Equal(t, false, parsed["include_reasoning"], "should be forced to false")
 }
 
