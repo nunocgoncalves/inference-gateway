@@ -1,0 +1,39 @@
+# Inference Gateway — Example Configuration
+#
+# Copy this file to gateway.yaml or gateway.local.yaml and adjust values.
+# Environment variables in ${...} syntax are expanded at load time.
+# Environment variable overrides (DATABASE_URL, REDIS_URL, etc.) take precedence.
+
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 300s       # Long timeout for streaming responses
+  idle_timeout: 120s
+
+database:
+  url: "${DATABASE_URL}"    # postgres://user:pass@host:5432/gateway?sslmode=disable
+  max_open_conns: 25
+  max_idle_conns: 10
+
+redis:
+  url: "${REDIS_URL}"       # redis://host:6379/0
+
+auth:
+  admin_key: "${ADMIN_API_KEY}"
+
+rate_limits:
+  default_rpm: 60           # Default requests per minute per API key
+  default_tpm: 100000       # Default tokens per minute per API key
+
+health_check:
+  interval: 10s             # How often to probe backend /health endpoints
+  timeout: 5s               # Per-probe timeout
+  healthy_threshold: 3      # Consecutive successes to mark backend healthy
+  unhealthy_threshold: 1    # Consecutive failures to mark backend unhealthy
+
+registry:
+  cache_refresh_interval: 30s  # How often to refresh the model cache from PostgreSQL
+
+logging:
+  level: info               # debug, info, warn, error
+  format: json              # json or text
