@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/auth"
+	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 )
@@ -42,7 +43,7 @@ func (h *Handler) handleStreaming(
 	}
 
 	proxyReq.Header.Set("Content-Type", "application/json")
-	if v := r.Header.Get("X-Request-ID"); v != "" {
+	if v := middleware.RequestIDFromContext(r.Context()); v != "" {
 		proxyReq.Header.Set("X-Request-ID", v)
 	}
 

@@ -13,10 +13,11 @@ import (
 type metricsContextKey struct{}
 
 // MetricsData holds per-request data collected during processing and
-// consumed by the metrics middleware when the response completes.
+// consumed by the metrics and logging middleware when the response completes.
 type MetricsData struct {
-	Model     string
-	Streaming bool
+	Model      string
+	Streaming  bool
+	BackendURL string // Set by the proxy handler after backend selection.
 }
 
 // Metrics returns middleware that records gateway_requests_total and

@@ -126,6 +126,9 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich metrics/logging context data with the selected backend.
+	md.BackendURL = backend.URL
+
 	// Apply request transforms.
 	body = ApplyRequestTransforms(body, model)
 	body = rewriteModelInRequest(body, model.ModelID)
@@ -155,7 +158,7 @@ func (h *Handler) handleNonStreaming(
 
 	// Copy relevant headers.
 	proxyReq.Header.Set("Content-Type", "application/json")
-	if v := r.Header.Get("X-Request-ID"); v != "" {
+	if v := middleware.RequestIDFromContext(r.Context()); v != "" {
 		proxyReq.Header.Set("X-Request-ID", v)
 	}
 

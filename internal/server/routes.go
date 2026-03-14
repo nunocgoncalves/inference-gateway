@@ -10,14 +10,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
+	gatewaymw "github.com/nunocgoncalves/inference-gateway/internal/middleware"
 )
 
 func newRouter(logger *slog.Logger, m *metrics.Metrics) http.Handler {
 	r := chi.NewRouter()
 
-	// Base middleware.
+	// Base middleware — order matters.
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RealIP)
+	r.Use(gatewaymw.RequestID)
+	r.Use(gatewaymw.Logging(logger))
 
 	// Health check — no auth required.
 	r.Get("/health", healthHandler)
