@@ -24,26 +24,25 @@ type Model struct {
 // when the client does not specify them. All fields are pointers so that
 // "not set" (nil) is distinguishable from a zero value.
 type DefaultParams struct {
-	Temperature      *float64 `json:"temperature,omitempty"`
-	TopP             *float64 `json:"top_p,omitempty"`
-	MaxTokens        *int     `json:"max_tokens,omitempty"`
-	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
-	TopK             *int     `json:"top_k,omitempty"`
-	MinP             *float64 `json:"min_p,omitempty"`
-	Stop             []string `json:"stop,omitempty"`
+	Temperature       *float64 `json:"temperature,omitempty"`
+	TopP              *float64 `json:"top_p,omitempty"`
+	MaxTokens         *int     `json:"max_tokens,omitempty"`
+	FrequencyPenalty  *float64 `json:"frequency_penalty,omitempty"`
+	PresencePenalty   *float64 `json:"presence_penalty,omitempty"`
+	RepetitionPenalty *float64 `json:"repetition_penalty,omitempty"`
+	TopK              *int     `json:"top_k,omitempty"`
+	MinP              *float64 `json:"min_p,omitempty"`
+	Stop              []string `json:"stop,omitempty"`
 }
 
 // ReasoningConfig controls reasoning/thinking behaviour for a model.
+// The gateway forwards this to vLLM as chat_template_kwargs.enable_thinking.
 //
-//   - Enabled == nil  → passthrough (no override, honour client request)
-//   - Enabled == true → force reasoning on with the specified effort/include
-//   - Enabled == false → force reasoning off (inject reasoning_effort:"none",
-//     include_reasoning:false regardless of what the client sends)
+//   - EnableThinking == nil  → passthrough (no override, honour client request)
+//   - EnableThinking == true → force thinking on
+//   - EnableThinking == false → force thinking off
 type ReasoningConfig struct {
-	Enabled          *bool  `json:"enabled,omitempty"`
-	ReasoningEffort  string `json:"reasoning_effort,omitempty"` // "low", "medium", "high"
-	IncludeReasoning *bool  `json:"include_reasoning,omitempty"`
+	EnableThinking *bool `json:"enable_thinking,omitempty"`
 }
 
 // Transforms define request/response transformation rules applied per model.

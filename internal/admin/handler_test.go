@@ -187,8 +187,7 @@ func TestCreateModel_WithConfig(t *testing.T) {
 			MaxTokens:   &maxTok,
 		},
 		ReasoningConfig: &registry.ReasoningConfig{
-			Enabled:         &enabled,
-			ReasoningEffort: "medium",
+			EnableThinking: &enabled,
 		},
 		Transforms: &registry.Transforms{
 			SystemPromptPrefix: "Be helpful.",
@@ -203,8 +202,7 @@ func TestCreateModel_WithConfig(t *testing.T) {
 	assert.Equal(t, float64(4096), dp["max_tokens"])
 
 	rc := body["reasoning_config"].(map[string]any)
-	assert.Equal(t, true, rc["enabled"])
-	assert.Equal(t, "medium", rc["reasoning_effort"])
+	assert.Equal(t, true, rc["enable_thinking"])
 
 	tf := body["transforms"].(map[string]any)
 	assert.Equal(t, "Be helpful.", tf["system_prompt_prefix"])

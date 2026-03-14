@@ -103,11 +103,11 @@ func TestApplyDefaultParams_NoDefaults(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestApplyReasoningConfig_Passthrough(t *testing.T) {
-	// Enabled == nil → passthrough, no changes.
-	body := []byte(`{"model": "test", "messages": [], "reasoning_effort": "high"}`)
+	// EnableThinking == nil → passthrough, no changes.
+	body := []byte(`{"model": "test", "messages": [], "chat_template_kwargs": {"enable_thinking": true}}`)
 	model := &registry.Model{
 		ReasoningConfig: registry.ReasoningConfig{
-			Enabled: nil, // passthrough
+			EnableThinking: nil, // passthrough
 		},
 	}
 
@@ -115,16 +115,15 @@ func TestApplyReasoningConfig_Passthrough(t *testing.T) {
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(result, &parsed))
-	assert.Equal(t, "high", parsed["reasoning_effort"], "client value preserved in passthrough mode")
+	kwargs := parsed["chat_template_kwargs"].(map[string]any)
+	assert.Equal(t, true, kwargs["enable_thinking"], "client value preserved in passthrough mode")
 }
 
 func TestApplyReasoningConfig_Enable(t *testing.T) {
 	body := []byte(`{"model": "test", "messages": []}`)
 	model := &registry.Model{
 		ReasoningConfig: registry.ReasoningConfig{
-			Enabled:          ptrBool(true),
-			ReasoningEffort:  "medium",
-			IncludeReasoning: ptrBool(true),
+			EnableThinking: ptrBool(true),
 		},
 	}
 
@@ -132,18 +131,16 @@ func TestApplyReasoningConfig_Enable(t *testing.T) {
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(result, &parsed))
-	assert.Equal(t, "medium", parsed["reasoning_effort"])
-	assert.Equal(t, true, parsed["include_reasoning"])
+	kwargs := parsed["chat_template_kwargs"].(map[string]any)
+	assert.Equal(t, true, kwargs["enable_thinking"])
 }
 
 func TestApplyReasoningConfig_EnableOverridesClient(t *testing.T) {
-	// When enabled=true, model config overrides client values.
-	body := []byte(`{"model": "test", "messages": [], "reasoning_effort": "high"}`)
+	// When EnableThinking=true, model config overrides client values.
+	body := []byte(`{"model": "test", "messages": [], "chat_template_kwargs": {"enable_thinking": false}}`)
 	model := &registry.Model{
 		ReasoningConfig: registry.ReasoningConfig{
-			Enabled:          ptrBool(true),
-			ReasoningEffort:  "low",
-			IncludeReasoning: ptrBool(true),
+			EnableThinking: ptrBool(true),
 		},
 	}
 
@@ -151,15 +148,16 @@ func TestApplyReasoningConfig_EnableOverridesClient(t *testing.T) {
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(result, &parsed))
-	assert.Equal(t, "low", parsed["reasoning_effort"], "model config overrides client")
+	kwargs := parsed["chat_template_kwargs"].(map[string]any)
+	assert.Equal(t, true, kwargs["enable_thinking"], "model config overrides client")
 }
 
 func TestApplyReasoningConfig_Disable(t *testing.T) {
-	// Enabled == false → force off, regardless of client.
-	body := []byte(`{"model": "test", "messages": [], "reasoning_effort": "high", "include_reasoning": true}`)
+	// EnableThinking == false → force thinking off, regardless of client.
+	body := []byte(`{"model": "test", "messages": [], "chat_template_kwargs": {"enable_thinking": true}}`)
 	model := &registry.Model{
 		ReasoningConfig: registry.ReasoningConfig{
-			Enabled: ptrBool(false),
+			EnableThinking: ptrBool(false),
 		},
 	}
 
@@ -167,9 +165,8 @@ func TestApplyReasoningConfig_Disable(t *testing.T) {
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(result, &parsed))
-	_, hasReasoningEffort := parsed["reasoning_effort"]
-	assert.False(t, hasReasoningEffort, "reasoning_effort should be removed entirely")
-	assert.Equal(t, false, parsed["include_reasoning"], "should be forced to false")
+	kwargs := parsed["chat_template_kwargs"].(map[string]any)
+	assert.Equal(t, false, kwargs["enable_thinking"], "should be forced to false")
 }
 
 // ---------------------------------------------------------------------------
@@ -267,9 +264,7 @@ func TestApplyAllTransforms(t *testing.T) {
 			MaxTokens:   ptrInt(8192),
 		},
 		ReasoningConfig: registry.ReasoningConfig{
-			Enabled:          ptrBool(true),
-			ReasoningEffort:  "high",
-			IncludeReasoning: ptrBool(true),
+			EnableThinking: ptrBool(true),
 		},
 		Transforms: registry.Transforms{
 			SystemPromptPrefix: "Think step by step.",
@@ -285,9 +280,9 @@ func TestApplyAllTransforms(t *testing.T) {
 	assert.Equal(t, 0.6, parsed["temperature"])
 	assert.Equal(t, float64(8192), parsed["max_tokens"])
 
-	// Reasoning enabled.
-	assert.Equal(t, "high", parsed["reasoning_effort"])
-	assert.Equal(t, true, parsed["include_reasoning"])
+	// Reasoning enabled via chat_template_kwargs.
+	kwargs := parsed["chat_template_kwargs"].(map[string]any)
+	assert.Equal(t, true, kwargs["enable_thinking"])
 
 	// System prompt prefix added.
 	messages := parsed["messages"].([]any)

@@ -57,6 +57,9 @@ func applyDefaultParams(parsed map[string]any, defaults registry.DefaultParams) 
 	if defaults.PresencePenalty != nil {
 		setIfAbsent("presence_penalty", *defaults.PresencePenalty)
 	}
+	if defaults.RepetitionPenalty != nil {
+		setIfAbsent("repetition_penalty", *defaults.RepetitionPenalty)
+	}
 	if defaults.TopK != nil {
 		setIfAbsent("top_k", *defaults.TopK)
 	}
@@ -68,32 +71,23 @@ func applyDefaultParams(parsed map[string]any, defaults registry.DefaultParams) 
 	}
 }
 
-// applyReasoningConfig applies reasoning configuration to the request:
-//   - Enabled == nil  → passthrough (no changes)
-//   - Enabled == true → inject reasoning_effort and include_reasoning from config
-//   - Enabled == false → force reasoning off by removing reasoning_effort and
-//     setting include_reasoning to false. The field is deleted rather than set
-//     to a sentinel value because vLLM only accepts "low", "medium", or "high".
+// applyReasoningConfig applies reasoning configuration to the request by
+// injecting chat_template_kwargs.enable_thinking for vLLM:
+//   - EnableThinking == nil  → passthrough (no changes)
+//   - EnableThinking == true → set chat_template_kwargs.enable_thinking = true
+//   - EnableThinking == false → set chat_template_kwargs.enable_thinking = false
 func applyReasoningConfig(parsed map[string]any, cfg registry.ReasoningConfig) {
-	if cfg.Enabled == nil {
+	if cfg.EnableThinking == nil {
 		// Passthrough — don't touch the request.
 		return
 	}
 
-	if *cfg.Enabled {
-		// Force reasoning on with configured parameters.
-		if cfg.ReasoningEffort != "" {
-			parsed["reasoning_effort"] = cfg.ReasoningEffort
-		}
-		if cfg.IncludeReasoning != nil {
-			parsed["include_reasoning"] = *cfg.IncludeReasoning
-		}
-	} else {
-		// Force reasoning off — remove reasoning_effort entirely so vLLM
-		// doesn't receive an unsupported value.
-		delete(parsed, "reasoning_effort")
-		parsed["include_reasoning"] = false
+	kwargs, ok := parsed["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		kwargs = make(map[string]any)
 	}
+	kwargs["enable_thinking"] = *cfg.EnableThinking
+	parsed["chat_template_kwargs"] = kwargs
 }
 
 // applySystemPromptPrefix prepends a system message to the messages array

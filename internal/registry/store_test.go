@@ -105,9 +105,7 @@ func TestPGStore_CreateAndGetModel(t *testing.T) {
 			MaxTokens:   ptrInt(4096),
 		},
 		ReasoningConfig: ReasoningConfig{
-			Enabled:          ptrBool(true),
-			ReasoningEffort:  "medium",
-			IncludeReasoning: ptrBool(true),
+			EnableThinking: ptrBool(true),
 		},
 		Transforms: Transforms{
 			SystemPromptPrefix: "You are a helpful assistant.",
@@ -132,8 +130,7 @@ func TestPGStore_CreateAndGetModel(t *testing.T) {
 	assert.Equal(t, "meta-llama/Llama-3.1-70B-Instruct", got.ModelID)
 	assert.Equal(t, 0.7, *got.DefaultParams.Temperature)
 	assert.Equal(t, 4096, *got.DefaultParams.MaxTokens)
-	assert.Equal(t, true, *got.ReasoningConfig.Enabled)
-	assert.Equal(t, "medium", got.ReasoningConfig.ReasoningEffort)
+	assert.Equal(t, true, *got.ReasoningConfig.EnableThinking)
 	assert.Equal(t, "You are a helpful assistant.", got.Transforms.SystemPromptPrefix)
 	assert.Equal(t, 100, *got.RateLimits.RPM)
 
@@ -143,7 +140,7 @@ func TestPGStore_CreateAndGetModel(t *testing.T) {
 	assert.Equal(t, "llama-70b", got2.Name)
 }
 
-func TestPGStore_ReasoningConfigDisabled(t *testing.T) {
+func TestPGStore_ReasoningConfigThinkingDisabled(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -158,15 +155,15 @@ func TestPGStore_ReasoningConfigDisabled(t *testing.T) {
 		ModelID: "meta-llama/Llama-3.1-70B-Instruct",
 		Active:  true,
 		ReasoningConfig: ReasoningConfig{
-			Enabled: ptrBool(false),
+			EnableThinking: ptrBool(false),
 		},
 	}
 	require.NoError(t, store.CreateModel(ctx, m))
 
 	got, err := store.GetModelByName(ctx, "llama-fast")
 	require.NoError(t, err)
-	require.NotNil(t, got.ReasoningConfig.Enabled)
-	assert.False(t, *got.ReasoningConfig.Enabled)
+	require.NotNil(t, got.ReasoningConfig.EnableThinking)
+	assert.False(t, *got.ReasoningConfig.EnableThinking)
 }
 
 func TestPGStore_ReasoningConfigPassthrough(t *testing.T) {
@@ -189,7 +186,7 @@ func TestPGStore_ReasoningConfigPassthrough(t *testing.T) {
 
 	got, err := store.GetModelByName(ctx, "llama-passthrough")
 	require.NoError(t, err)
-	assert.Nil(t, got.ReasoningConfig.Enabled, "nil Enabled means passthrough")
+	assert.Nil(t, got.ReasoningConfig.EnableThinking, "nil EnableThinking means passthrough")
 }
 
 func TestPGStore_UpdateModel(t *testing.T) {
