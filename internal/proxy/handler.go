@@ -116,7 +116,8 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply request transforms: rewrite model name to actual vLLM model ID.
+	// Apply request transforms.
+	body = ApplyRequestTransforms(body, model)
 	body = rewriteModelInRequest(body, model.ModelID)
 
 	// Forward to backend.
@@ -183,17 +184,6 @@ func (h *Handler) handleNonStreaming(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(respBody)
-}
-
-// handleStreaming is a placeholder — implemented in Ticket 8.
-func (h *Handler) handleStreaming(
-	w http.ResponseWriter,
-	r *http.Request,
-	body []byte,
-	backend *registry.Backend,
-	model *registry.Model,
-) {
-	writeError(w, http.StatusNotImplemented, "streaming not yet implemented", "not_implemented")
 }
 
 // trackUsage extracts token usage from a non-streaming response and increments
