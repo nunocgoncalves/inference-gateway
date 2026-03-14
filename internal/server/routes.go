@@ -7,9 +7,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
 )
 
-func newRouter(logger *slog.Logger) http.Handler {
+func newRouter(logger *slog.Logger, m *metrics.Metrics) http.Handler {
 	r := chi.NewRouter()
 
 	// Base middleware.
@@ -18,6 +21,11 @@ func newRouter(logger *slog.Logger) http.Handler {
 
 	// Health check — no auth required.
 	r.Get("/health", healthHandler)
+
+	// Prometheus metrics endpoint.
+	if m != nil {
+		r.Handle("/metrics", promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{}))
+	}
 
 	// OpenAI-compatible endpoints (auth + rate limiting will be added later).
 	r.Route("/v1", func(r chi.Router) {

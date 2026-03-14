@@ -8,17 +8,22 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Server is the main HTTP server for the gateway.
 type Server struct {
 	httpServer *http.Server
 	logger     *slog.Logger
+	metrics    *metrics.Metrics
 }
 
-// New creates a new Server with the provided configuration.
+// New creates a new Server with the provided configuration. It initialises
+// the Prometheus metrics registry and wires it into the router.
 func New(cfg *config.Config, logger *slog.Logger) *Server {
-	router := newRouter(logger)
+	m := metrics.New(prometheus.NewRegistry())
+	router := newRouter(logger, m)
 
 	return &Server{
 		httpServer: &http.Server{
@@ -28,8 +33,14 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 			WriteTimeout: cfg.Server.WriteTimeout,
 			IdleTimeout:  cfg.Server.IdleTimeout,
 		},
-		logger: logger,
+		logger:  logger,
+		metrics: m,
 	}
+}
+
+// Metrics returns the Prometheus metrics instance for use by other components.
+func (s *Server) Metrics() *metrics.Metrics {
+	return s.metrics
 }
 
 // Start begins listening for HTTP requests. It blocks until the server is

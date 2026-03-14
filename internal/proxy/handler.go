@@ -12,6 +12,8 @@ import (
 
 	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 	"github.com/nunocgoncalves/inference-gateway/internal/loadbalancer"
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
+	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 )
@@ -22,6 +24,7 @@ type Handler struct {
 	balancers map[string]*loadbalancer.WeightedRoundRobin // keyed by model name
 	limiter   ratelimit.Limiter
 	hc        *loadbalancer.HealthChecker
+	metrics   *metrics.Metrics
 	client    *http.Client
 	logger    *slog.Logger
 }
@@ -31,6 +34,7 @@ func NewHandler(
 	cache *registry.Cache,
 	limiter ratelimit.Limiter,
 	hc *loadbalancer.HealthChecker,
+	m *metrics.Metrics,
 	logger *slog.Logger,
 ) *Handler {
 	return &Handler{
@@ -38,6 +42,7 @@ func NewHandler(
 		balancers: make(map[string]*loadbalancer.WeightedRoundRobin),
 		limiter:   limiter,
 		hc:        hc,
+		metrics:   m,
 		client: &http.Client{
 			Timeout: 300 * time.Second, // Long timeout for inference
 			// Don't follow redirects.
@@ -81,6 +86,11 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "model is required", "invalid_request_error")
 		return
 	}
+
+	// Store metrics data in context for the metrics middleware.
+	md := &middleware.MetricsData{Model: req.Model, Streaming: req.Stream}
+	ctx := middleware.SetMetricsData(r.Context(), md)
+	r = r.WithContext(ctx)
 
 	// Check model access for the authenticated key.
 	apiKey := auth.APIKeyFromContext(r.Context())
@@ -149,6 +159,7 @@ func (h *Handler) handleNonStreaming(
 		proxyReq.Header.Set("X-Request-ID", v)
 	}
 
+	backendStart := time.Now()
 	resp, err := h.client.Do(proxyReq)
 	if err != nil {
 		h.logger.Error("backend request failed",
@@ -164,16 +175,22 @@ func (h *Handler) handleNonStreaming(
 
 	// Read the backend response.
 	respBody, err := io.ReadAll(resp.Body)
+	backendDuration := time.Since(backendStart).Seconds()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to read backend response", "backend_error")
 		return
 	}
 
+	// Record backend request duration.
+	if h.metrics != nil {
+		h.metrics.BackendRequestDuration.WithLabelValues(model.Name, backend.URL).Observe(backendDuration)
+	}
+
 	// Rewrite model name in response back to the alias.
 	respBody = rewriteModelInResponse(respBody, model.Name)
 
-	// Update TPM from usage in response.
-	h.trackUsage(r.Context(), respBody)
+	// Update TPM from usage in response and record token metrics.
+	h.trackUsage(r.Context(), respBody, model.Name, backendDuration)
 
 	// Copy response headers.
 	for k, vv := range resp.Header {
@@ -186,25 +203,44 @@ func (h *Handler) handleNonStreaming(
 	w.Write(respBody)
 }
 
-// trackUsage extracts token usage from a non-streaming response and increments
-// the TPM counter.
-func (h *Handler) trackUsage(ctx context.Context, respBody []byte) {
-	apiKey := auth.APIKeyFromContext(ctx)
-	if apiKey == nil || h.limiter == nil {
-		return
-	}
-
+// trackUsage extracts token usage from a non-streaming response, increments
+// the TPM counter, and records Prometheus token metrics.
+func (h *Handler) trackUsage(ctx context.Context, respBody []byte, modelName string, durationSec float64) {
 	var resp struct {
 		Usage *struct {
-			TotalTokens int `json:"total_tokens"`
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(respBody, &resp); err != nil || resp.Usage == nil {
 		return
 	}
 
-	if resp.Usage.TotalTokens > 0 {
+	// Rate limit TPM tracking.
+	apiKey := auth.APIKeyFromContext(ctx)
+	if apiKey != nil && h.limiter != nil && resp.Usage.TotalTokens > 0 {
 		h.limiter.IncrementTPM(ctx, apiKey.ID, resp.Usage.TotalTokens)
+	}
+
+	// Prometheus token counters and tokens/s histograms.
+	if h.metrics != nil {
+		if resp.Usage.PromptTokens > 0 {
+			h.metrics.PromptTokensTotal.WithLabelValues(modelName).Add(float64(resp.Usage.PromptTokens))
+		}
+		if resp.Usage.CompletionTokens > 0 {
+			h.metrics.CompletionTokensTotal.WithLabelValues(modelName).Add(float64(resp.Usage.CompletionTokens))
+		}
+		if durationSec > 0 {
+			if resp.Usage.PromptTokens > 0 {
+				h.metrics.TokensPerSecond.WithLabelValues(modelName, "prompt").
+					Observe(float64(resp.Usage.PromptTokens) / durationSec)
+			}
+			if resp.Usage.CompletionTokens > 0 {
+				h.metrics.TokensPerSecond.WithLabelValues(modelName, "completion").
+					Observe(float64(resp.Usage.CompletionTokens) / durationSec)
+			}
+		}
 	}
 }
 

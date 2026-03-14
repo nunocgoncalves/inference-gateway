@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
 	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 )
 
@@ -29,12 +30,15 @@ type HealthChecker struct {
 	client   *http.Client
 	logger   *slog.Logger
 	onChange OnHealthChange
+	metrics  *metrics.Metrics
 
 	mu       sync.Mutex
 	probes   map[string]*probeState // keyed by backend ID
 	stopCh   chan struct{}
 	done     chan struct{}
 	backends []registry.Backend
+	// backendMeta maps backend ID to model name + URL for gauge labels.
+	backendMeta map[string]backendInfo
 }
 
 type probeState struct {
@@ -43,22 +47,48 @@ type probeState struct {
 	healthy            bool
 }
 
-// NewHealthChecker creates a new health checker.
-func NewHealthChecker(cfg HealthCheckConfig, logger *slog.Logger, onChange OnHealthChange) *HealthChecker {
+type backendInfo struct {
+	modelName  string
+	backendURL string
+}
+
+// NewHealthChecker creates a new health checker. The metrics parameter is
+// optional — pass nil to disable backend health gauge tracking.
+func NewHealthChecker(cfg HealthCheckConfig, logger *slog.Logger, onChange OnHealthChange, m *metrics.Metrics) *HealthChecker {
 	return &HealthChecker{
 		cfg: cfg,
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		logger:   logger,
-		onChange: onChange,
-		probes:   make(map[string]*probeState),
-		stopCh:   make(chan struct{}),
-		done:     make(chan struct{}),
+		logger:      logger,
+		onChange:    onChange,
+		metrics:     m,
+		probes:      make(map[string]*probeState),
+		stopCh:      make(chan struct{}),
+		done:        make(chan struct{}),
+		backendMeta: make(map[string]backendInfo),
 	}
 }
 
+// StartWithModel begins the periodic health check loop for the given backends
+// associated with the named model.
+func (hc *HealthChecker) StartWithModel(modelName string, backends []registry.Backend) {
+	hc.mu.Lock()
+	hc.backends = backends
+	for _, b := range backends {
+		if _, ok := hc.probes[b.ID]; !ok {
+			hc.probes[b.ID] = &probeState{healthy: b.Healthy}
+		}
+		hc.backendMeta[b.ID] = backendInfo{modelName: modelName, backendURL: b.URL}
+		hc.setBackendHealthGauge(modelName, b.URL, b.Healthy)
+	}
+	hc.mu.Unlock()
+
+	go hc.loop()
+}
+
 // Start begins the periodic health check loop for the given backends.
+// Deprecated: Use StartWithModel for metrics support.
 func (hc *HealthChecker) Start(backends []registry.Backend) {
 	hc.mu.Lock()
 	hc.backends = backends
@@ -120,6 +150,10 @@ func (hc *HealthChecker) ReportFailure(backendID string) {
 
 	if wasHealthy {
 		hc.logger.Warn("backend marked unhealthy (passive)", "backend_id", backendID)
+		// Update Prometheus gauge.
+		if meta, ok := hc.backendMeta[backendID]; ok {
+			hc.setBackendHealthGauge(meta.modelName, meta.backendURL, false)
+		}
 		if hc.onChange != nil {
 			hc.onChange(backendID, false)
 		}
@@ -199,6 +233,10 @@ func (hc *HealthChecker) checkOne(backend registry.Backend) {
 		} else {
 			hc.logger.Warn("backend marked unhealthy (active)", "backend_id", backend.ID, "url", backend.URL)
 		}
+		// Update Prometheus gauge.
+		if meta, ok := hc.backendMeta[backend.ID]; ok {
+			hc.setBackendHealthGauge(meta.modelName, meta.backendURL, newHealthy)
+		}
 		if hc.onChange != nil {
 			hc.onChange(backend.ID, newHealthy)
 		}
@@ -219,4 +257,16 @@ func (hc *HealthChecker) probe(ctx context.Context, baseURL string) bool {
 	defer resp.Body.Close()
 
 	return resp.StatusCode == http.StatusOK
+}
+
+// setBackendHealthGauge updates the Prometheus backend_health gauge.
+func (hc *HealthChecker) setBackendHealthGauge(modelName, backendURL string, healthy bool) {
+	if hc.metrics == nil {
+		return
+	}
+	v := 0.0
+	if healthy {
+		v = 1.0
+	}
+	hc.metrics.BackendHealth.WithLabelValues(modelName, backendURL).Set(v)
 }

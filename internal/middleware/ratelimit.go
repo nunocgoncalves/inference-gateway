@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/auth"
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 )
 
@@ -23,7 +24,9 @@ type RateLimitConfig struct {
 //
 // TPM is checked here as a pre-flight check. The actual TPM increment happens
 // after the response completes (in the proxy handler).
-func RateLimit(limiter ratelimit.Limiter, cfg RateLimitConfig, logger *slog.Logger) func(http.Handler) http.Handler {
+//
+// The metrics parameter is optional — pass nil to disable rate limit hit tracking.
+func RateLimit(limiter ratelimit.Limiter, cfg RateLimitConfig, m *metrics.Metrics, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := auth.APIKeyFromContext(r.Context())
@@ -53,6 +56,9 @@ func RateLimit(limiter ratelimit.Limiter, cfg RateLimitConfig, logger *slog.Logg
 			setRateLimitHeaders(w, "Requests", rpmResult)
 
 			if !rpmResult.Allowed {
+				if m != nil {
+					m.RateLimitHitsTotal.WithLabelValues(key.KeyPrefix, "rpm").Inc()
+				}
 				writeRateLimitError(w, rpmResult.ResetAt)
 				return
 			}
@@ -73,6 +79,9 @@ func RateLimit(limiter ratelimit.Limiter, cfg RateLimitConfig, logger *slog.Logg
 			setRateLimitHeaders(w, "Tokens", tpmResult)
 
 			if !tpmResult.Allowed {
+				if m != nil {
+					m.RateLimitHitsTotal.WithLabelValues(key.KeyPrefix, "tpm").Inc()
+				}
 				writeRateLimitError(w, tpmResult.ResetAt)
 				return
 			}

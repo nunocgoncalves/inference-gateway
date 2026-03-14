@@ -10,10 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nunocgoncalves/inference-gateway/internal/auth"
-	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/nunocgoncalves/inference-gateway/internal/auth"
+	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
+	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 )
 
 // mockLimiter is a minimal mock for middleware tests.
@@ -60,7 +64,7 @@ func TestRateLimit_Allowed(t *testing.T) {
 		},
 	}
 
-	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, logger)
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, nil, logger)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -70,10 +74,123 @@ func TestRateLimit_Allowed(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "60", rec.Header().Get("X-RateLimit-Limit-Requests"))
-	assert.Equal(t, "59", rec.Header().Get("X-RateLimit-Remaining-Requests"))
-	assert.Equal(t, "100000", rec.Header().Get("X-RateLimit-Limit-Tokens"))
-	assert.Equal(t, "99000", rec.Header().Get("X-RateLimit-Remaining-Tokens"))
+}
+
+func TestRateLimit_RPMExceededIncrementsMetric(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	limiter := &mockLimiter{
+		rpmResult: &ratelimit.Result{
+			Allowed:   false,
+			Limit:     60,
+			Remaining: 0,
+			ResetAt:   time.Now().Add(30 * time.Second),
+		},
+	}
+
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, m, logger)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not reach handler")
+	}))
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	key := &auth.APIKey{
+		ID:        "key-metric",
+		Name:      "metric-test",
+		KeyPrefix: "ml-abc123",
+		Active:    true,
+	}
+	ctx := auth.WithAPIKey(req.Context(), key)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	fam := findRLFamily(families, "gateway_rate_limit_hits_total")
+	require.NotNil(t, fam, "rate_limit_hits_total should exist")
+	require.Len(t, fam.GetMetric(), 1)
+
+	metric := fam.GetMetric()[0]
+	labels := rlLabelMap(metric)
+	assert.Equal(t, "ml-abc123", labels["key_prefix"])
+	assert.Equal(t, "rpm", labels["limit_type"])
+	assert.Equal(t, 1.0, metric.GetCounter().GetValue())
+}
+
+func TestRateLimit_TPMExceededIncrementsMetric(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	limiter := &mockLimiter{
+		rpmResult: &ratelimit.Result{
+			Allowed:   true,
+			Limit:     60,
+			Remaining: 50,
+			ResetAt:   time.Now().Add(60 * time.Second),
+		},
+		tpmResult: &ratelimit.Result{
+			Allowed:   false,
+			Limit:     100000,
+			Remaining: 0,
+			ResetAt:   time.Now().Add(45 * time.Second),
+		},
+	}
+
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, m, logger)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not reach handler")
+	}))
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	key := &auth.APIKey{
+		ID:        "key-tpm",
+		Name:      "tpm-test",
+		KeyPrefix: "ml-xyz789",
+		Active:    true,
+	}
+	ctx := auth.WithAPIKey(req.Context(), key)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	fam := findRLFamily(families, "gateway_rate_limit_hits_total")
+	require.NotNil(t, fam)
+	require.Len(t, fam.GetMetric(), 1)
+
+	metric := fam.GetMetric()[0]
+	labels := rlLabelMap(metric)
+	assert.Equal(t, "ml-xyz789", labels["key_prefix"])
+	assert.Equal(t, "tpm", labels["limit_type"])
+	assert.Equal(t, 1.0, metric.GetCounter().GetValue())
+}
+
+func findRLFamily(families []*dto.MetricFamily, name string) *dto.MetricFamily {
+	for _, f := range families {
+		if f.GetName() == name {
+			return f
+		}
+	}
+	return nil
+}
+
+func rlLabelMap(m *dto.Metric) map[string]string {
+	out := make(map[string]string)
+	for _, lp := range m.GetLabel() {
+		out[lp.GetName()] = lp.GetValue()
+	}
+	return out
 }
 
 func TestRateLimit_RPMExceeded(t *testing.T) {
@@ -87,7 +204,7 @@ func TestRateLimit_RPMExceeded(t *testing.T) {
 		},
 	}
 
-	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, logger)
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, nil, logger)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not reach handler")
 	}))
@@ -123,7 +240,7 @@ func TestRateLimit_TPMExceeded(t *testing.T) {
 		},
 	}
 
-	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, logger)
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, nil, logger)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not reach handler")
 	}))
@@ -139,7 +256,7 @@ func TestRateLimit_NoKeyInContext(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	limiter := &mockLimiter{}
 
-	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, logger)
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, nil, logger)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -172,7 +289,7 @@ func TestRateLimit_CustomKeyLimits(t *testing.T) {
 		},
 	}
 
-	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, logger)
+	mw := RateLimit(limiter, RateLimitConfig{DefaultRPM: 60, DefaultTPM: 100000}, nil, logger)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

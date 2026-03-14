@@ -153,7 +153,7 @@ func setupHandler(t *testing.T) (*Handler, func()) {
 	cache := registry.NewCache(store, rdb, logger, 1*time.Hour)
 	require.NoError(t, cache.Start(ctx))
 
-	handler := NewHandler(cache, nil, nil, logger)
+	handler := NewHandler(cache, nil, nil, nil, logger)
 
 	cleanup := func() {
 		cache.Stop()
@@ -262,7 +262,7 @@ func TestChatCompletions_ModelRewrite(t *testing.T) {
 	require.NoError(t, cache.Start(ctx))
 	defer cache.Stop()
 
-	handler := NewHandler(cache, nil, nil, logger)
+	handler := NewHandler(cache, nil, nil, nil, logger)
 
 	body := `{"model": "my-alias", "messages": [{"role": "user", "content": "Hi"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
@@ -385,7 +385,7 @@ func TestChatCompletions_BackendDown(t *testing.T) {
 	require.NoError(t, cache.Start(ctx))
 	defer cache.Stop()
 
-	handler := NewHandler(cache, nil, nil, logger)
+	handler := NewHandler(cache, nil, nil, nil, logger)
 
 	body := `{"model": "down-model", "messages": [{"role": "user", "content": "Hi"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
@@ -451,7 +451,7 @@ func TestListModels_FilteredByKey(t *testing.T) {
 	require.NoError(t, cache.Start(ctx))
 	defer cache.Stop()
 
-	handler := NewHandler(cache, nil, nil, logger)
+	handler := NewHandler(cache, nil, nil, nil, logger)
 
 	// Key that only allows model-a and model-c.
 	req := httptest.NewRequest("GET", "/v1/models", nil)

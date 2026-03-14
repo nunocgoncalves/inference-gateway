@@ -207,7 +207,7 @@ func setupStreamHandler(t *testing.T, vllmURL string, limiter ratelimit.Limiter)
 	cache := registry.NewCache(store, rdb, logger, 1*time.Hour)
 	require.NoError(t, cache.Start(ctx))
 
-	handler := NewHandler(cache, limiter, nil, logger)
+	handler := NewHandler(cache, limiter, nil, nil, logger)
 
 	cleanup := func() {
 		cache.Stop()

@@ -298,7 +298,7 @@ func TestHealthChecker_DetectsUnhealthy(t *testing.T) {
 		Timeout:            1 * time.Second,
 		HealthyThreshold:   2,
 		UnhealthyThreshold: 1,
-	}, logger, onChange)
+	}, logger, onChange, nil)
 
 	backends := []registry.Backend{
 		{ID: "bad", URL: srv.URL, Weight: 1, Active: true, Healthy: true},
@@ -343,7 +343,7 @@ func TestHealthChecker_DetectsRecovery(t *testing.T) {
 		Timeout:            1 * time.Second,
 		HealthyThreshold:   2,
 		UnhealthyThreshold: 1,
-	}, logger, onChange)
+	}, logger, onChange, nil)
 
 	backends := []registry.Backend{
 		{ID: "recover", URL: srv.URL, Weight: 1, Active: true, Healthy: true},
@@ -396,7 +396,7 @@ func TestHealthChecker_PassiveFailure(t *testing.T) {
 		Timeout:            1 * time.Second,
 		HealthyThreshold:   3,
 		UnhealthyThreshold: 1,
-	}, logger, onChange)
+	}, logger, onChange, nil)
 
 	backends := []registry.Backend{
 		{ID: "passive", URL: srv.URL, Weight: 1, Active: true, Healthy: true},
@@ -425,7 +425,7 @@ func TestHealthChecker_UpdateBackends(t *testing.T) {
 		Timeout:            1 * time.Second,
 		HealthyThreshold:   1,
 		UnhealthyThreshold: 1,
-	}, logger, nil)
+	}, logger, nil, nil)
 
 	hc.Start([]registry.Backend{
 		{ID: "old", URL: srv.URL, Weight: 1, Active: true, Healthy: true},
@@ -460,7 +460,7 @@ func TestHealthChecker_UnreachableBackend(t *testing.T) {
 		Timeout:            200 * time.Millisecond,
 		HealthyThreshold:   3,
 		UnhealthyThreshold: 1,
-	}, logger, onChange)
+	}, logger, onChange, nil)
 
 	// Point to a port that nothing listens on.
 	backends := []registry.Backend{

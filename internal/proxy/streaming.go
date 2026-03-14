@@ -21,6 +21,8 @@ const tpmBatchInterval = 500 * time.Millisecond
 // handleStreaming proxies a streaming SSE response from vLLM to the client,
 // flushing each chunk immediately (no buffering). It injects
 // continuous_usage_stats for live TPM tracking and rewrites model names.
+// It also records TTFT, ITL, active_streams, backend_request_duration,
+// and token metrics.
 func (h *Handler) handleStreaming(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -44,6 +46,7 @@ func (h *Handler) handleStreaming(
 		proxyReq.Header.Set("X-Request-ID", v)
 	}
 
+	backendStart := time.Now()
 	resp, err := h.client.Do(proxyReq)
 	if err != nil {
 		h.logger.Error("streaming backend request failed",
@@ -55,6 +58,12 @@ func (h *Handler) handleStreaming(
 		return
 	}
 	defer resp.Body.Close()
+
+	// Record backend response time (time to first byte from backend).
+	if h.metrics != nil {
+		h.metrics.BackendRequestDuration.WithLabelValues(model.Name, backend.URL).
+			Observe(time.Since(backendStart).Seconds())
+	}
 
 	// If backend returns non-200, forward the error as-is (not SSE).
 	if resp.StatusCode != http.StatusOK {
@@ -68,6 +77,12 @@ func (h *Handler) handleStreaming(
 		w.WriteHeader(resp.StatusCode)
 		w.Write(respBody)
 		return
+	}
+
+	// Track active streams.
+	if h.metrics != nil {
+		h.metrics.ActiveStreams.WithLabelValues(model.Name).Inc()
+		defer h.metrics.ActiveStreams.WithLabelValues(model.Name).Dec()
 	}
 
 	// Set SSE headers.
@@ -92,7 +107,13 @@ func (h *Handler) handleStreaming(
 	}
 
 	// Stream SSE chunks from backend to client.
-	var prevTotalTokens int
+	var (
+		prevTotalTokens int
+		lastChunkAt     time.Time    // When the previous content chunk arrived.
+		gotFirstContent bool         // Whether we've seen a content chunk.
+		finalUsage      *streamUsage // Last usage stats seen (cumulative).
+	)
+
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase buffer size for long lines (e.g., large content chunks).
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -126,13 +147,36 @@ func (h *Handler) handleStreaming(
 		// Parse the chunk to rewrite model name and extract usage.
 		chunk, rewritten := processStreamChunk(data, model.Name)
 
+		// Track TTFT and ITL from content-bearing chunks.
+		now := time.Now()
+		if chunk != nil && chunkHasContent(data) {
+			if !gotFirstContent {
+				gotFirstContent = true
+				// TTFT: time from backend request start to first content chunk.
+				if h.metrics != nil {
+					h.metrics.TimeToFirstToken.WithLabelValues(model.Name).
+						Observe(now.Sub(backendStart).Seconds())
+				}
+			} else {
+				// ITL: time between consecutive content chunks.
+				if h.metrics != nil && !lastChunkAt.IsZero() {
+					h.metrics.InterTokenLatency.WithLabelValues(model.Name).
+						Observe(now.Sub(lastChunkAt).Seconds())
+				}
+			}
+			lastChunkAt = now
+		}
+
 		// Track TPM from continuous usage stats.
-		if chunk != nil && chunk.Usage != nil && batcher != nil {
-			totalTokens := chunk.Usage.TotalTokens
-			delta := totalTokens - prevTotalTokens
-			if delta > 0 {
-				batcher.Add(delta)
-				prevTotalTokens = totalTokens
+		if chunk != nil && chunk.Usage != nil {
+			finalUsage = chunk.Usage
+			if batcher != nil {
+				totalTokens := chunk.Usage.TotalTokens
+				delta := totalTokens - prevTotalTokens
+				if delta > 0 {
+					batcher.Add(delta)
+					prevTotalTokens = totalTokens
+				}
 			}
 		}
 
@@ -143,6 +187,30 @@ func (h *Handler) handleStreaming(
 	if err := scanner.Err(); err != nil {
 		h.logger.Error("error reading streaming response",
 			"backend", backend.URL, "model", model.Name, "error", err)
+	}
+
+	// Record final token metrics from the last usage chunk.
+	if h.metrics != nil && finalUsage != nil {
+		streamDuration := time.Since(backendStart).Seconds()
+
+		if finalUsage.PromptTokens > 0 {
+			h.metrics.PromptTokensTotal.WithLabelValues(model.Name).
+				Add(float64(finalUsage.PromptTokens))
+		}
+		if finalUsage.CompletionTokens > 0 {
+			h.metrics.CompletionTokensTotal.WithLabelValues(model.Name).
+				Add(float64(finalUsage.CompletionTokens))
+		}
+		if streamDuration > 0 {
+			if finalUsage.PromptTokens > 0 {
+				h.metrics.TokensPerSecond.WithLabelValues(model.Name, "prompt").
+					Observe(float64(finalUsage.PromptTokens) / streamDuration)
+			}
+			if finalUsage.CompletionTokens > 0 {
+				h.metrics.TokensPerSecond.WithLabelValues(model.Name, "completion").
+					Observe(float64(finalUsage.CompletionTokens) / streamDuration)
+			}
+		}
 	}
 }
 
@@ -182,6 +250,28 @@ func processStreamChunk(data string, aliasName string) (*streamChunk, string) {
 	json.Unmarshal([]byte(data), &chunk)
 
 	return &chunk, string(rewritten)
+}
+
+// chunkHasContent returns true if the SSE data chunk contains a non-empty
+// content delta. This is used to determine which chunks represent actual
+// token generation (for TTFT and ITL metrics) vs. role/metadata-only chunks.
+func chunkHasContent(data string) bool {
+	var parsed struct {
+		Choices []struct {
+			Delta struct {
+				Content *string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+		return false
+	}
+	for _, c := range parsed.Choices {
+		if c.Delta.Content != nil && *c.Delta.Content != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // injectStreamOptions ensures stream_options.include_usage and
