@@ -240,10 +240,10 @@ func TestMigrateSchemaDetails(t *testing.T) {
 
 	// Verify api_keys unique constraint on key_hash.
 	_, err = pool.Exec(ctx,
-		`INSERT INTO api_keys (name, key_hash, key_prefix) VALUES ('key1', 'hash123', 'ig-abcd')`)
+		`INSERT INTO api_keys (name, key_hash, key_prefix) VALUES ('key1', 'hash123', 'ml-abcd')`)
 	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx,
-		`INSERT INTO api_keys (name, key_hash, key_prefix) VALUES ('key2', 'hash123', 'ig-efgh')`)
+		`INSERT INTO api_keys (name, key_hash, key_prefix) VALUES ('key2', 'hash123', 'ml-efgh')`)
 	assert.Error(t, err, "duplicate key_hash should violate unique constraint")
 }
