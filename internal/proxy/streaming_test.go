@@ -484,6 +484,25 @@ func TestProcessStreamChunk(t *testing.T) {
 	assert.Equal(t, "my-alias", parsed["model"])
 }
 
+func TestPromptTokensBucket(t *testing.T) {
+	tests := []struct {
+		tokens int
+		want   string
+	}{
+		{tokens: 0, want: "le_1k"},
+		{tokens: 1024, want: "le_1k"},
+		{tokens: 1025, want: "1k_2k"},
+		{tokens: 4096, want: "2k_4k"},
+		{tokens: 8193, want: "8k_16k"},
+		{tokens: 32769, want: "32k_64k"},
+		{tokens: 65537, want: "gt_64k"},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, promptTokensBucket(tt.tokens))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

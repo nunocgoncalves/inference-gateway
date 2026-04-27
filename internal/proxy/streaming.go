@@ -111,6 +111,7 @@ func (h *Handler) handleStreaming(
 	var (
 		prevTotalTokens int
 		lastChunkAt     time.Time    // When the previous content chunk arrived.
+		firstContentAt  time.Time    // When the first content chunk arrived.
 		gotFirstContent bool         // Whether we've seen a content chunk.
 		finalUsage      *streamUsage // Last usage stats seen (cumulative).
 	)
@@ -153,6 +154,7 @@ func (h *Handler) handleStreaming(
 		if chunk != nil && chunkHasContent(data) {
 			if !gotFirstContent {
 				gotFirstContent = true
+				firstContentAt = now
 				// TTFT: time from backend request start to first content chunk.
 				if h.metrics != nil {
 					h.metrics.TimeToFirstToken.WithLabelValues(model.Name).
@@ -192,24 +194,41 @@ func (h *Handler) handleStreaming(
 
 	// Record final token metrics from the last usage chunk.
 	if h.metrics != nil && finalUsage != nil {
-		streamDuration := time.Since(backendStart).Seconds()
+		streamEnd := time.Now()
+		streamDuration := streamEnd.Sub(backendStart).Seconds()
+		promptDuration := streamDuration
+		decodeDuration := streamDuration
+		if !firstContentAt.IsZero() {
+			promptDuration = firstContentAt.Sub(backendStart).Seconds()
+			decodeDuration = streamEnd.Sub(firstContentAt).Seconds()
+		}
 
 		if finalUsage.PromptTokens > 0 {
 			h.metrics.PromptTokensTotal.WithLabelValues(model.Name).
 				Add(float64(finalUsage.PromptTokens))
+			h.metrics.TokensPerRequest.WithLabelValues(model.Name, "prompt").
+				Observe(float64(finalUsage.PromptTokens))
 		}
 		if finalUsage.CompletionTokens > 0 {
 			h.metrics.CompletionTokensTotal.WithLabelValues(model.Name).
 				Add(float64(finalUsage.CompletionTokens))
+			h.metrics.TokensPerRequest.WithLabelValues(model.Name, "completion").
+				Observe(float64(finalUsage.CompletionTokens))
 		}
-		if streamDuration > 0 {
+		if promptDuration > 0 {
 			if finalUsage.PromptTokens > 0 {
 				h.metrics.TokensPerSecond.WithLabelValues(model.Name, "prompt").
-					Observe(float64(finalUsage.PromptTokens) / streamDuration)
+					Observe(float64(finalUsage.PromptTokens) / promptDuration)
 			}
+		}
+		if decodeDuration > 0 {
 			if finalUsage.CompletionTokens > 0 {
+				completionTokensPerSecond := float64(finalUsage.CompletionTokens) / decodeDuration
 				h.metrics.TokensPerSecond.WithLabelValues(model.Name, "completion").
-					Observe(float64(finalUsage.CompletionTokens) / streamDuration)
+					Observe(completionTokensPerSecond)
+				h.metrics.CompletionTokensPerSecondByPromptBucket.
+					WithLabelValues(model.Name, promptTokensBucket(finalUsage.PromptTokens)).
+					Observe(completionTokensPerSecond)
 			}
 		}
 	}
@@ -297,4 +316,25 @@ func injectStreamOptions(body []byte) []byte {
 		return body
 	}
 	return rewritten
+}
+
+func promptTokensBucket(tokens int) string {
+	switch {
+	case tokens <= 1024:
+		return "le_1k"
+	case tokens <= 2048:
+		return "1k_2k"
+	case tokens <= 4096:
+		return "2k_4k"
+	case tokens <= 8192:
+		return "4k_8k"
+	case tokens <= 16384:
+		return "8k_16k"
+	case tokens <= 32768:
+		return "16k_32k"
+	case tokens <= 65536:
+		return "32k_64k"
+	default:
+		return "gt_64k"
+	}
 }

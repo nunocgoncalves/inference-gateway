@@ -22,7 +22,7 @@ func TestNew_RegistersAllMetrics(t *testing.T) {
 		names[f.GetName()] = true
 	}
 
-	// All 11 metrics should not appear yet (no observations) — but they
+	// All metrics should not appear yet (no observations) — but they
 	// should be registered. We verify by observing/incrementing each one
 	// and then gathering.
 
@@ -32,6 +32,8 @@ func TestNew_RegistersAllMetrics(t *testing.T) {
 	m.TimeToFirstToken.WithLabelValues("test-model").Observe(0.1)
 	m.InterTokenLatency.WithLabelValues("test-model").Observe(0.01)
 	m.TokensPerSecond.WithLabelValues("test-model", "completion").Observe(50)
+	m.TokensPerRequest.WithLabelValues("test-model", "prompt").Observe(1024)
+	m.CompletionTokensPerSecondByPromptBucket.WithLabelValues("test-model", "le_1k").Observe(50)
 	m.PromptTokensTotal.WithLabelValues("test-model").Add(100)
 	m.CompletionTokensTotal.WithLabelValues("test-model").Add(200)
 	m.ActiveStreams.WithLabelValues("test-model").Inc()
@@ -53,6 +55,8 @@ func TestNew_RegistersAllMetrics(t *testing.T) {
 		"gateway_time_to_first_token_seconds",
 		"gateway_inter_token_latency_seconds",
 		"gateway_tokens_per_second",
+		"gateway_tokens_per_request",
+		"gateway_completion_tokens_per_second_by_prompt_bucket",
 		"gateway_prompt_tokens_total",
 		"gateway_completion_tokens_total",
 		"gateway_active_streams",
@@ -181,6 +185,39 @@ func TestTokensPerSecondLabels(t *testing.T) {
 	fam := findFamily(families, "gateway_tokens_per_second")
 	require.NotNil(t, fam)
 	assert.Len(t, fam.GetMetric(), 2)
+}
+
+func TestTokensPerRequestLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+
+	m.TokensPerRequest.WithLabelValues("model-x", "prompt").Observe(2048)
+	m.TokensPerRequest.WithLabelValues("model-x", "completion").Observe(128)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	fam := findFamily(families, "gateway_tokens_per_request")
+	require.NotNil(t, fam)
+	assert.Len(t, fam.GetMetric(), 2)
+}
+
+func TestCompletionTokensPerSecondByPromptBucketLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+
+	m.CompletionTokensPerSecondByPromptBucket.WithLabelValues("model-x", "8k_16k").Observe(25)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	fam := findFamily(families, "gateway_completion_tokens_per_second_by_prompt_bucket")
+	require.NotNil(t, fam)
+	require.Len(t, fam.GetMetric(), 1)
+
+	labels := labelMap(fam.GetMetric()[0])
+	assert.Equal(t, "model-x", labels["model"])
+	assert.Equal(t, "8k_16k", labels["prompt_tokens_bucket"])
 }
 
 // ---------------------------------------------------------------------------

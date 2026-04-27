@@ -24,6 +24,13 @@ type Metrics struct {
 	// TokensPerSecond observes tokens generated per second per request.
 	TokensPerSecond *prometheus.HistogramVec
 
+	// TokensPerRequest observes token counts per request.
+	TokensPerRequest *prometheus.HistogramVec
+
+	// CompletionTokensPerSecondByPromptBucket observes completion throughput
+	// grouped by bounded prompt token buckets.
+	CompletionTokensPerSecondByPromptBucket *prometheus.HistogramVec
+
 	// PromptTokensTotal counts total prompt tokens processed.
 	PromptTokensTotal *prometheus.CounterVec
 
@@ -85,6 +92,22 @@ func New(reg *prometheus.Registry) *Metrics {
 			Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000},
 		}, []string{"model", "type"}),
 
+		TokensPerRequest: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "gateway_tokens_per_request",
+			Help: "Token counts per request.",
+			Buckets: []float64{
+				1, 8, 16, 32, 64, 128, 256, 512,
+				1024, 2048, 4096, 8192, 16384, 32768,
+				65536, 131072,
+			},
+		}, []string{"model", "type"}),
+
+		CompletionTokensPerSecondByPromptBucket: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "gateway_completion_tokens_per_second_by_prompt_bucket",
+			Help:    "Completion tokens per second grouped by prompt token bucket.",
+			Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000},
+		}, []string{"model", "prompt_tokens_bucket"}),
+
 		PromptTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gateway_prompt_tokens_total",
 			Help: "Total prompt tokens processed.",
@@ -124,6 +147,8 @@ func New(reg *prometheus.Registry) *Metrics {
 		m.TimeToFirstToken,
 		m.InterTokenLatency,
 		m.TokensPerSecond,
+		m.TokensPerRequest,
+		m.CompletionTokensPerSecondByPromptBucket,
 		m.PromptTokensTotal,
 		m.CompletionTokensTotal,
 		m.ActiveStreams,
