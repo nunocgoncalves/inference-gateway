@@ -230,9 +230,13 @@ func (h *Handler) trackUsage(ctx context.Context, respBody []byte, modelName str
 	if h.metrics != nil {
 		if resp.Usage.PromptTokens > 0 {
 			h.metrics.PromptTokensTotal.WithLabelValues(modelName).Add(float64(resp.Usage.PromptTokens))
+			h.metrics.TokensPerRequest.WithLabelValues(modelName, "prompt").
+				Observe(float64(resp.Usage.PromptTokens))
 		}
 		if resp.Usage.CompletionTokens > 0 {
 			h.metrics.CompletionTokensTotal.WithLabelValues(modelName).Add(float64(resp.Usage.CompletionTokens))
+			h.metrics.TokensPerRequest.WithLabelValues(modelName, "completion").
+				Observe(float64(resp.Usage.CompletionTokens))
 		}
 		if durationSec > 0 {
 			if resp.Usage.PromptTokens > 0 {
@@ -240,8 +244,12 @@ func (h *Handler) trackUsage(ctx context.Context, respBody []byte, modelName str
 					Observe(float64(resp.Usage.PromptTokens) / durationSec)
 			}
 			if resp.Usage.CompletionTokens > 0 {
+				completionTokensPerSecond := float64(resp.Usage.CompletionTokens) / durationSec
 				h.metrics.TokensPerSecond.WithLabelValues(modelName, "completion").
-					Observe(float64(resp.Usage.CompletionTokens) / durationSec)
+					Observe(completionTokensPerSecond)
+				h.metrics.CompletionTokensPerSecondByPromptBucket.
+					WithLabelValues(modelName, promptTokensBucket(resp.Usage.PromptTokens)).
+					Observe(completionTokensPerSecond)
 			}
 		}
 	}
