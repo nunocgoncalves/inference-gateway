@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/auth"
+	"github.com/nunocgoncalves/inference-gateway/internal/inference"
+	"github.com/nunocgoncalves/inference-gateway/internal/inference/vllm"
 	"github.com/nunocgoncalves/inference-gateway/internal/loadbalancer"
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
 	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
@@ -25,7 +26,7 @@ type Handler struct {
 	limiter   ratelimit.Limiter
 	hc        *loadbalancer.HealthChecker
 	metrics   *metrics.Metrics
-	client    *http.Client
+	executor  inference.Executor
 	logger    *slog.Logger
 }
 
@@ -43,14 +44,8 @@ func NewHandler(
 		limiter:   limiter,
 		hc:        hc,
 		metrics:   m,
-		client: &http.Client{
-			Timeout: 300 * time.Second, // Long timeout for inference
-			// Don't follow redirects.
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		logger: logger,
+		executor:  vllm.NewExecutor(nil),
+		logger:    logger,
 	}
 }
 
@@ -129,15 +124,21 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Enrich metrics/logging context data with the selected backend.
 	md.BackendURL = backend.URL
 
+	// Resolve the engine-agnostic model target. The current standalone gateway
+	// maps public aliases directly to backend model IDs; tenant/adapter routing
+	// will populate adapter fields from local policy snapshots.
+	target := modelTargetFromRegistryModel(model, req.Model)
+
 	// Apply request transforms.
 	body = ApplyRequestTransforms(body, model)
-	body = rewriteModelInRequest(body, model.ModelID)
+	body = rewriteModelInRequest(body, target)
 
-	// Forward to backend.
+	// Forward to backend through the data-plane executor boundary.
+	replica := replicaTargetFromBackend(backend, target)
 	if req.Stream {
-		h.handleStreaming(w, r, body, backend, model)
+		h.handleStreaming(w, r, body, backend, model, target, replica)
 	} else {
-		h.handleNonStreaming(w, r, body, backend, model)
+		h.handleNonStreaming(w, r, body, backend, model, target, replica)
 	}
 }
 
@@ -147,23 +148,16 @@ func (h *Handler) handleNonStreaming(
 	body []byte,
 	backend *registry.Backend,
 	model *registry.Model,
+	target inference.ModelTarget,
+	replica inference.ReplicaTarget,
 ) {
-	backendURL := fmt.Sprintf("%s/v1/chat/completions", backend.URL)
-
-	proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, backendURL, bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create proxy request", "server_error")
-		return
-	}
-
-	// Copy relevant headers.
-	proxyReq.Header.Set("Content-Type", "application/json")
-	if v := middleware.RequestIDFromContext(r.Context()); v != "" {
-		proxyReq.Header.Set("X-Request-ID", v)
-	}
-
 	backendStart := time.Now()
-	resp, err := h.client.Do(proxyReq)
+	resp, err := h.executor.ChatCompletion(r.Context(), inference.ExecutionRequest{
+		Body:    body,
+		Headers: executionHeaders(r),
+		Target:  target,
+		Replica: replica,
+	})
 	if err != nil {
 		h.logger.Error("backend request failed",
 			"backend", backend.URL, "model", model.Name, "error", err)
@@ -174,15 +168,7 @@ func (h *Handler) handleNonStreaming(
 		writeError(w, http.StatusBadGateway, "backend request failed", "backend_error")
 		return
 	}
-	defer resp.Body.Close()
-
-	// Read the backend response.
-	respBody, err := io.ReadAll(resp.Body)
 	backendDuration := time.Since(backendStart).Seconds()
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to read backend response", "backend_error")
-		return
-	}
 
 	// Record backend request duration.
 	if h.metrics != nil {
@@ -190,7 +176,7 @@ func (h *Handler) handleNonStreaming(
 	}
 
 	// Rewrite model name in response back to the alias.
-	respBody = rewriteModelInResponse(respBody, model.Name)
+	respBody := rewriteModelInResponse(resp.Body, model.Name)
 
 	// Update TPM from usage in response and record token metrics.
 	h.trackUsage(r.Context(), respBody, model.Name, backendDuration)
@@ -230,13 +216,9 @@ func (h *Handler) trackUsage(ctx context.Context, respBody []byte, modelName str
 	if h.metrics != nil {
 		if resp.Usage.PromptTokens > 0 {
 			h.metrics.PromptTokensTotal.WithLabelValues(modelName).Add(float64(resp.Usage.PromptTokens))
-			h.metrics.TokensPerRequest.WithLabelValues(modelName, "prompt").
-				Observe(float64(resp.Usage.PromptTokens))
 		}
 		if resp.Usage.CompletionTokens > 0 {
 			h.metrics.CompletionTokensTotal.WithLabelValues(modelName).Add(float64(resp.Usage.CompletionTokens))
-			h.metrics.TokensPerRequest.WithLabelValues(modelName, "completion").
-				Observe(float64(resp.Usage.CompletionTokens))
 		}
 		if durationSec > 0 {
 			if resp.Usage.PromptTokens > 0 {
@@ -244,12 +226,8 @@ func (h *Handler) trackUsage(ctx context.Context, respBody []byte, modelName str
 					Observe(float64(resp.Usage.PromptTokens) / durationSec)
 			}
 			if resp.Usage.CompletionTokens > 0 {
-				completionTokensPerSecond := float64(resp.Usage.CompletionTokens) / durationSec
 				h.metrics.TokensPerSecond.WithLabelValues(modelName, "completion").
-					Observe(completionTokensPerSecond)
-				h.metrics.CompletionTokensPerSecondByPromptBucket.
-					WithLabelValues(modelName, promptTokensBucket(resp.Usage.PromptTokens)).
-					Observe(completionTokensPerSecond)
+					Observe(float64(resp.Usage.CompletionTokens) / durationSec)
 			}
 		}
 	}
@@ -301,14 +279,43 @@ type chatCompletionRequest struct {
 	Stream bool   `json:"stream"`
 }
 
-// rewriteModelInRequest replaces the "model" field in the JSON body with
-// the actual vLLM model ID.
-func rewriteModelInRequest(body []byte, modelID string) []byte {
+// modelTargetFromRegistryModel adapts the current standalone model registry to
+// the engine-agnostic target shape. Future M5 routing will resolve this from
+// organization-scoped policy/routing snapshots instead of only model aliases.
+func modelTargetFromRegistryModel(model *registry.Model, publicModelName string) inference.ModelTarget {
+	return inference.ModelTarget{
+		PublicModelName:  publicModelName,
+		BaseModelID:      model.ModelID,
+		BackendModelName: model.ModelID,
+	}
+}
+
+func replicaTargetFromBackend(backend *registry.Backend, target inference.ModelTarget) inference.ReplicaTarget {
+	return inference.ReplicaTarget{
+		ID:            backend.ID,
+		URL:           backend.URL,
+		BackendPoolID: target.BackendPoolID,
+		EngineType:    inference.EngineVLLM,
+	}
+}
+
+func executionHeaders(r *http.Request) http.Header {
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	if v := middleware.RequestIDFromContext(r.Context()); v != "" {
+		headers.Set("X-Request-ID", v)
+	}
+	return headers
+}
+
+// rewriteModelInRequest replaces the "model" field in the JSON body with the
+// engine-specific internal model/LoRA name from the resolved ModelTarget.
+func rewriteModelInRequest(body []byte, target inference.ModelTarget) []byte {
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return body
 	}
-	parsed["model"] = modelID
+	parsed["model"] = target.EngineModelName()
 	rewritten, err := json.Marshal(parsed)
 	if err != nil {
 		return body

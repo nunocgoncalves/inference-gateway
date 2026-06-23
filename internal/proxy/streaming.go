@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/auth"
-	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
+	"github.com/nunocgoncalves/inference-gateway/internal/inference"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 )
@@ -30,25 +29,19 @@ func (h *Handler) handleStreaming(
 	body []byte,
 	backend *registry.Backend,
 	model *registry.Model,
+	target inference.ModelTarget,
+	replica inference.ReplicaTarget,
 ) {
 	// Inject stream_options for continuous usage stats.
 	body = injectStreamOptions(body)
 
-	backendURL := fmt.Sprintf("%s/v1/chat/completions", backend.URL)
-
-	proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, backendURL, bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create proxy request", "server_error")
-		return
-	}
-
-	proxyReq.Header.Set("Content-Type", "application/json")
-	if v := middleware.RequestIDFromContext(r.Context()); v != "" {
-		proxyReq.Header.Set("X-Request-ID", v)
-	}
-
 	backendStart := time.Now()
-	resp, err := h.client.Do(proxyReq)
+	resp, err := h.executor.StreamChatCompletion(r.Context(), inference.ExecutionRequest{
+		Body:    body,
+		Headers: executionHeaders(r),
+		Target:  target,
+		Replica: replica,
+	})
 	if err != nil {
 		h.logger.Error("streaming backend request failed",
 			"backend", backend.URL, "model", model.Name, "error", err)
@@ -111,7 +104,6 @@ func (h *Handler) handleStreaming(
 	var (
 		prevTotalTokens int
 		lastChunkAt     time.Time    // When the previous content chunk arrived.
-		firstContentAt  time.Time    // When the first content chunk arrived.
 		gotFirstContent bool         // Whether we've seen a content chunk.
 		finalUsage      *streamUsage // Last usage stats seen (cumulative).
 	)
@@ -154,7 +146,6 @@ func (h *Handler) handleStreaming(
 		if chunk != nil && chunkHasContent(data) {
 			if !gotFirstContent {
 				gotFirstContent = true
-				firstContentAt = now
 				// TTFT: time from backend request start to first content chunk.
 				if h.metrics != nil {
 					h.metrics.TimeToFirstToken.WithLabelValues(model.Name).
@@ -194,41 +185,24 @@ func (h *Handler) handleStreaming(
 
 	// Record final token metrics from the last usage chunk.
 	if h.metrics != nil && finalUsage != nil {
-		streamEnd := time.Now()
-		streamDuration := streamEnd.Sub(backendStart).Seconds()
-		promptDuration := streamDuration
-		decodeDuration := streamDuration
-		if !firstContentAt.IsZero() {
-			promptDuration = firstContentAt.Sub(backendStart).Seconds()
-			decodeDuration = streamEnd.Sub(firstContentAt).Seconds()
-		}
+		streamDuration := time.Since(backendStart).Seconds()
 
 		if finalUsage.PromptTokens > 0 {
 			h.metrics.PromptTokensTotal.WithLabelValues(model.Name).
 				Add(float64(finalUsage.PromptTokens))
-			h.metrics.TokensPerRequest.WithLabelValues(model.Name, "prompt").
-				Observe(float64(finalUsage.PromptTokens))
 		}
 		if finalUsage.CompletionTokens > 0 {
 			h.metrics.CompletionTokensTotal.WithLabelValues(model.Name).
 				Add(float64(finalUsage.CompletionTokens))
-			h.metrics.TokensPerRequest.WithLabelValues(model.Name, "completion").
-				Observe(float64(finalUsage.CompletionTokens))
 		}
-		if promptDuration > 0 {
+		if streamDuration > 0 {
 			if finalUsage.PromptTokens > 0 {
 				h.metrics.TokensPerSecond.WithLabelValues(model.Name, "prompt").
-					Observe(float64(finalUsage.PromptTokens) / promptDuration)
+					Observe(float64(finalUsage.PromptTokens) / streamDuration)
 			}
-		}
-		if decodeDuration > 0 {
 			if finalUsage.CompletionTokens > 0 {
-				completionTokensPerSecond := float64(finalUsage.CompletionTokens) / decodeDuration
 				h.metrics.TokensPerSecond.WithLabelValues(model.Name, "completion").
-					Observe(completionTokensPerSecond)
-				h.metrics.CompletionTokensPerSecondByPromptBucket.
-					WithLabelValues(model.Name, promptTokensBucket(finalUsage.PromptTokens)).
-					Observe(completionTokensPerSecond)
+					Observe(float64(finalUsage.CompletionTokens) / streamDuration)
 			}
 		}
 	}
@@ -316,25 +290,4 @@ func injectStreamOptions(body []byte) []byte {
 		return body
 	}
 	return rewritten
-}
-
-func promptTokensBucket(tokens int) string {
-	switch {
-	case tokens <= 1024:
-		return "le_1k"
-	case tokens <= 2048:
-		return "1k_2k"
-	case tokens <= 4096:
-		return "2k_4k"
-	case tokens <= 8192:
-		return "4k_8k"
-	case tokens <= 16384:
-		return "8k_16k"
-	case tokens <= 32768:
-		return "16k_32k"
-	case tokens <= 65536:
-		return "32k_64k"
-	default:
-		return "gt_64k"
-	}
 }

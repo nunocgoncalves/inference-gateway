@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/auth"
+	"github.com/nunocgoncalves/inference-gateway/internal/inference"
 	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -487,11 +488,15 @@ func TestListModels_FilteredByKey(t *testing.T) {
 
 func TestRewriteModelInRequest(t *testing.T) {
 	body := []byte(`{"model": "my-alias", "messages": [{"role": "user", "content": "hi"}], "temperature": 0.7}`)
-	rewritten := rewriteModelInRequest(body, "meta-llama/Llama-3.1-70B-Instruct")
+	target := inference.ModelTarget{
+		BaseModelID:      "meta-llama/Llama-3.1-70B-Instruct",
+		BackendModelName: "lora_org_123_support_agent_v17",
+	}
+	rewritten := rewriteModelInRequest(body, target)
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(rewritten, &parsed))
-	assert.Equal(t, "meta-llama/Llama-3.1-70B-Instruct", parsed["model"])
+	assert.Equal(t, "lora_org_123_support_agent_v17", parsed["model"])
 	assert.Equal(t, 0.7, parsed["temperature"])
 }
 
