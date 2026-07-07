@@ -79,11 +79,13 @@ func extractBearerToken(r *http.Request) string {
 func writeAuthError(w http.ResponseWriter, status int, message string, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "authentication_error",
 			"code":    code,
 		},
-	})
+	}); err != nil {
+		slog.Error("failed to write auth error response", "error", err)
+	}
 }

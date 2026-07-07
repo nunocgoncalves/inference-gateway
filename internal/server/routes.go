@@ -72,17 +72,21 @@ func newRouter(logger *slog.Logger, m *metrics.Metrics, deps *Deps) http.Handler
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		slog.Error("failed to write health response", "error", err)
+	}
 }
 
 func notImplementedHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotImplemented)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": "not implemented",
 			"type":    "not_implemented_error",
 			"code":    "not_implemented",
 		},
-	})
+	}); err != nil {
+		slog.Error("failed to write not-implemented response", "error", err)
+	}
 }

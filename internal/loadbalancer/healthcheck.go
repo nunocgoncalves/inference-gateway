@@ -88,6 +88,7 @@ func (hc *HealthChecker) StartWithModel(modelName string, backends []registry.Ba
 }
 
 // Start begins the periodic health check loop for the given backends.
+//
 // Deprecated: Use StartWithModel for metrics support.
 func (hc *HealthChecker) Start(backends []registry.Backend) {
 	hc.mu.Lock()

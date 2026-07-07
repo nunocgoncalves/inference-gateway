@@ -24,6 +24,8 @@ const tpmBatchInterval = 500 * time.Millisecond
 // continuous_usage_stats for live TPM tracking and rewrites model names.
 // It also records TTFT, ITL, active_streams, backend_request_duration,
 // and token metrics.
+//
+//nolint:gocyclo // SSE streaming orchestration; extraction tracked separately.
 func (h *Handler) handleStreaming(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -76,7 +78,9 @@ func (h *Handler) handleStreaming(
 			}
 		}
 		w.WriteHeader(resp.StatusCode)
-		w.Write(respBody)
+		if _, err := w.Write(respBody); err != nil {
+			h.logger.Error("failed to write backend error response", "model", model.Name, "error", err)
+		}
 		return
 	}
 
@@ -160,12 +164,10 @@ func (h *Handler) handleStreaming(
 					h.metrics.TimeToFirstToken.WithLabelValues(model.Name).
 						Observe(now.Sub(backendStart).Seconds())
 				}
-			} else {
+			} else if h.metrics != nil && !lastChunkAt.IsZero() {
 				// ITL: time between consecutive content chunks.
-				if h.metrics != nil && !lastChunkAt.IsZero() {
-					h.metrics.InterTokenLatency.WithLabelValues(model.Name).
-						Observe(now.Sub(lastChunkAt).Seconds())
-				}
+				h.metrics.InterTokenLatency.WithLabelValues(model.Name).
+					Observe(now.Sub(lastChunkAt).Seconds())
 			}
 			lastChunkAt = now
 		}
@@ -265,9 +267,11 @@ func processStreamChunk(data string, aliasName string) (*streamChunk, string) {
 		return nil, data
 	}
 
-	// Extract usage for TPM tracking.
+	// Extract usage for TPM tracking. data already parsed successfully above.
 	var chunk streamChunk
-	json.Unmarshal([]byte(data), &chunk)
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return nil, data
+	}
 
 	return &chunk, string(rewritten)
 }

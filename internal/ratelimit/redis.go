@@ -145,9 +145,11 @@ func (l *RedisLimiter) check(ctx context.Context, key string, limit int) (*Resul
 	windowStart := now.Add(-windowSize).UnixMicro()
 
 	// Get all members in the window.
-	members, err := l.rdb.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min: fmt.Sprintf("%d", windowStart),
-		Max: "+inf",
+	members, err := l.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     key,
+		Start:   fmt.Sprintf("%d", windowStart),
+		Stop:    "+inf",
+		ByScore: true,
 	}).Result()
 	if err != nil {
 		return nil, fmt.Errorf("checking rate limit: %w", err)
