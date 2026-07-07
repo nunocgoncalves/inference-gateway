@@ -203,7 +203,9 @@ func (h *Handler) handleNonStreaming(
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	w.Write(respBody)
+	if _, err := w.Write(respBody); err != nil {
+		h.logger.Error("failed to write backend response", "model", model.Name, "error", err)
+	}
 }
 
 // trackUsage extracts token usage from a non-streaming response, increments
@@ -223,7 +225,9 @@ func (h *Handler) trackUsage(ctx context.Context, respBody []byte, modelName str
 	// Rate limit TPM tracking.
 	apiKey := auth.APIKeyFromContext(ctx)
 	if apiKey != nil && h.limiter != nil && resp.Usage.TotalTokens > 0 {
-		h.limiter.IncrementTPM(ctx, apiKey.ID, resp.Usage.TotalTokens)
+		if err := h.limiter.IncrementTPM(ctx, apiKey.ID, resp.Usage.TotalTokens); err != nil {
+			h.logger.Error("failed to increment TPM", "model", modelName, "error", err)
+		}
 	}
 
 	// Prometheus token counters and tokens/s histograms.
@@ -284,10 +288,12 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"object": "list",
 		"data":   data,
-	})
+	}); err != nil {
+		h.logger.Error("failed to encode models response", "error", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -336,11 +342,13 @@ func rewriteModelInResponse(body []byte, aliasName string) []byte {
 func writeError(w http.ResponseWriter, status int, message string, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "invalid_request_error",
 			"code":    code,
 		},
-	})
+	}); err != nil {
+		slog.Error("failed to write error response", "error", err)
+	}
 }

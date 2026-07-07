@@ -63,7 +63,7 @@ func (c *Cache) Start(ctx context.Context) error {
 		return fmt.Errorf("initial cache load: %w", err)
 	}
 
-	go c.loop()
+	go c.loop(ctx)
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (c *Cache) Invalidate(ctx context.Context) error {
 // Internal
 // ---------------------------------------------------------------------------
 
-func (c *Cache) loop() {
+func (c *Cache) loop(ctx context.Context) {
 	defer close(c.done)
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
@@ -166,8 +166,8 @@ func (c *Cache) loop() {
 		case <-c.stopCh:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := c.refresh(ctx); err != nil {
+			tickCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := c.refresh(tickCtx); err != nil {
 				c.logger.Error("failed to refresh registry cache", "error", err)
 			}
 			cancel()

@@ -338,39 +338,47 @@ func (h *Handler) invalidateCache(r *http.Request) {
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		h.logger.Error("failed to write JSON response", "error", err)
+	}
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, status int, message string, err error) {
 	h.logger.Error(message, "error", err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "server_error",
 		},
-	})
+	}); err != nil {
+		h.logger.Error("failed to write error response", "error", err)
+	}
 }
 
 func (h *Handler) writeValidationError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "validation_error",
 		},
-	})
+	}); err != nil {
+		h.logger.Error("failed to write validation error response", "error", err)
+	}
 }
 
 func (h *Handler) writeNotFound(w http.ResponseWriter, resource string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": resource + " not found",
 			"type":    "not_found",
 		},
-	})
+	}); err != nil {
+		h.logger.Error("failed to write not-found response", "error", err)
+	}
 }

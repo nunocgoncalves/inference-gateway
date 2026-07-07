@@ -109,11 +109,13 @@ func writeRateLimitError(w http.ResponseWriter, resetAt time.Time) {
 	w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusTooManyRequests)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": "Rate limit exceeded. Please retry after the specified time.",
 			"type":    "rate_limit_error",
 			"code":    "rate_limit_exceeded",
 		},
-	})
+	}); err != nil {
+		slog.Error("failed to write rate limit error response", "error", err)
+	}
 }

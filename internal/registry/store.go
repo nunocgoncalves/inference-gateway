@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -350,10 +349,4 @@ func scanModelRow(row pgx.Row) (*Model, error) {
 		return nil, fmt.Errorf("unmarshaling rate_limits: %w", err)
 	}
 	return &m, nil
-}
-
-// nowPtr returns a pointer to the current time. Useful for optional timestamps.
-func nowPtr() *time.Time {
-	t := time.Now()
-	return &t
 }

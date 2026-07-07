@@ -33,7 +33,10 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		runServe()
+		if err := runServe(); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
 	case "migrate":
 		runMigrate()
 	default:
@@ -52,7 +55,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  migrate down [N]   Roll back N migrations (default 1), then exit")
 }
 
-func runServe() {
+func runServe() error {
 	configPath := ""
 	if len(os.Args) > 2 {
 		configPath = os.Args[2]
@@ -66,8 +69,7 @@ func runServe() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	logger := newLogger(cfg.Logging)
@@ -76,8 +78,7 @@ func runServe() {
 	// --- Connect to PostgreSQL ---
 	pool, err := database.Connect(ctx, cfg.Database)
 	if err != nil {
-		logger.Error("failed to connect to database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer pool.Close()
 	logger.Info("connected to database")
@@ -85,14 +86,12 @@ func runServe() {
 	// --- Connect to Redis ---
 	redisOpts, err := redis.ParseURL(cfg.Redis.URL)
 	if err != nil {
-		logger.Error("failed to parse redis URL", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to parse redis URL: %w", err)
 	}
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		logger.Error("failed to connect to redis", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to redis: %w", err)
 	}
 	logger.Info("connected to redis")
 
@@ -106,8 +105,7 @@ func runServe() {
 	// --- Create registry cache ---
 	cache := registry.NewCache(registryStore, rdb, logger, cfg.Registry.CacheRefreshInterval)
 	if err := cache.Start(ctx); err != nil {
-		logger.Error("failed to start registry cache", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to start registry cache: %w", err)
 	}
 	defer cache.Stop()
 	logger.Info("registry cache started")
@@ -152,14 +150,13 @@ func runServe() {
 
 	select {
 	case err := <-errCh:
-		logger.Error("server error", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("server error: %w", err)
 	case sig := <-sigCh:
 		logger.Info("received signal, shutting down", "signal", sig)
 		if err := srv.Shutdown(30 * time.Second); err != nil {
-			logger.Error("shutdown error", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("shutdown error: %w", err)
 		}
+		return nil
 	}
 }
 
