@@ -35,7 +35,8 @@ Clients ──> [ Auth: API key -> identity ] ──> [ RateLimit: per-identity 
 - **Catalog / auth / policy / rate-limits:** read-only from the control-plane's
   Postgres views (`catalog.effective_catalog`, `identity.api_keys`,
   `permissions.effective_capabilities`, `permissions.effective_rate_limits`).
-  The gateway **owns no tables** — `gateway migrate` is a no-op.
+  The gateway **owns no tables** (no `migrate` subcommand; the control-plane
+  creates the schemas).
 - **Snapshot cache:** in-memory, per pod; refreshed on start, on LISTEN/NOTIFY
   (`catalog_changed` / `api_keys_changed` / `permissions_changed`), and on a 30s
   poll fallback. `/readyz` goes unhealthy if the snapshot is stale, so a pod with
@@ -118,7 +119,7 @@ make lint           # golangci-lint
 ```
 
 ```
-cmd/gateway/main.go        serve + migrate (no-op)
+cmd/gateway/main.go        serve
 internal/
   config/                  configuration
   database/                PG connection pool (no migrations — gateway owns no tables)

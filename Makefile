@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check install-hooks run migrate-up migrate-down clean
+.PHONY: build test lint fmt fmt-check install-hooks run clean
 
 BINARY := bin/gateway
 GO := go
@@ -28,12 +28,6 @@ install-hooks:
 
 run: build
 	$(BINARY) serve
-
-migrate-up: build
-	$(BINARY) migrate up
-
-migrate-down: build
-	$(BINARY) migrate down
 
 clean:
 	rm -rf bin/

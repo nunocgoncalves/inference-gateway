@@ -25,15 +25,6 @@ services:
       timeout: 3s
       retries: 5
 
-  migrate:
-    build: .
-    command: ["migrate", "up"]
-    environment:
-      DATABASE_URL: postgres://gateway:gateway@postgres:5432/gateway?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   gateway:
     build: .
     ports:
@@ -44,8 +35,8 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:-admin-dev-key}
       LOG_FORMAT: text
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
 
