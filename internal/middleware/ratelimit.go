@@ -12,40 +12,28 @@ import (
 	"github.com/nunocgoncalves/inference-gateway/internal/snapshot"
 )
 
-// RateLimitConfig holds the global default rate limits (used when an identity
-// has no per-identity rate-limit policy).
-type RateLimitConfig struct {
-	DefaultRPM int
-	DefaultTPM int
-}
-
-// RateLimit enforces per-identity RPM/TPM limits. The limit comes from the
-// snapshot (permissions.effective_rate_limits) or the global default; the
-// counter is in Redis, keyed by identity_id (shared across the identity's keys
-// and across pods). TPM is a pre-flight check; the actual TPM increment happens
-// after the response (in the proxy handler).
-func RateLimit(cache snapshot.Reader, limiter ratelimit.Limiter, cfg RateLimitConfig, m *metrics.Metrics, logger *slog.Logger) func(http.Handler) http.Handler {
+// RateLimit enforces the per-identity RPM/TPM limits from the control-plane
+// (permissions.effective_rate_limits). There are NO gateway-side defaults: an
+// identity with no rate-limit policy is unlimited (the control-plane's rule).
+// The counter is in Redis, keyed by identity_id (shared across the identity's
+// keys and across pods). TPM is a pre-flight check; the actual TPM increment
+// happens after the response (in the proxy handler).
+func RateLimit(cache snapshot.Reader, limiter ratelimit.Limiter, m *metrics.Metrics, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			identityID := IdentityIDFromContext(r.Context())
 			if identityID == "" {
-				// No identity — Auth should have rejected. Pass through.
+				next.ServeHTTP(w, r)
+				return
+			}
+			rl, ok := cache.RateLimits(identityID)
+			if !ok {
+				// No per-identity rate-limit policy -> unlimited (control-plane rule).
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			rpmLimit := cfg.DefaultRPM
-			tpmLimit := cfg.DefaultTPM
-			if rl, ok := cache.RateLimits(identityID); ok {
-				if rl.RPM > 0 {
-					rpmLimit = rl.RPM
-				}
-				if rl.TPM > 0 {
-					tpmLimit = rl.TPM
-				}
-			}
-
-			rpmResult, err := limiter.CheckRPM(r.Context(), identityID, rpmLimit)
+			rpmResult, err := limiter.CheckRPM(r.Context(), identityID, rl.RPM)
 			if err != nil {
 				logger.Error("rate limit check failed", "error", err, "identity_id", identityID)
 				next.ServeHTTP(w, r) // fail open
@@ -60,7 +48,7 @@ func RateLimit(cache snapshot.Reader, limiter ratelimit.Limiter, cfg RateLimitCo
 				return
 			}
 
-			tpmResult, err := limiter.CheckTPM(r.Context(), identityID, tpmLimit)
+			tpmResult, err := limiter.CheckTPM(r.Context(), identityID, rl.TPM)
 			if err != nil {
 				logger.Error("TPM check failed", "error", err, "identity_id", identityID)
 				next.ServeHTTP(w, r)

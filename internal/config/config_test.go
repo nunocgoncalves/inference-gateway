@@ -12,8 +12,6 @@ import (
 func TestDefaults(t *testing.T) {
 	cfg := defaults()
 	assert.Equal(t, 8080, cfg.Server.Port)
-	assert.Equal(t, 60, cfg.RateLimits.DefaultRPM)
-	assert.Equal(t, 100000, cfg.RateLimits.DefaultTPM)
 	assert.Equal(t, "info", cfg.Logging.Level)
 	assert.Equal(t, "json", cfg.Logging.Format)
 }
