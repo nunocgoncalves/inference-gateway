@@ -91,7 +91,10 @@ CREATE VIEW catalog.effective_catalog AS
     WHERE m.deleted_at IS NULL;
 `
 
-func setupTestDB(t *testing.T) *pgxpool.Pool {
+// setupTestDB starts a Postgres container, applies the contract fixture, and
+// returns a pool + connection string (the cache needs a connStr for its LISTEN
+// connection).
+func setupTestDB(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 	ctx := context.Background()
 	pgC, err := postgres.Run(ctx, "postgres:16-alpine",
@@ -112,18 +115,14 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 
 	_, err = pool.Exec(ctx, fixtureSchema)
 	require.NoError(t, err)
-	return pool
+	return pool, connStr
 }
 
-// TestPGStore exercises the snapshot reads against the contract fixture: catalog
-// (alias -> backend_url + rewrite id + per-alias config + available), API-key
-// resolution, broad-default capabilities, and per-identity rate limits.
-func TestPGStore(t *testing.T) {
-	pool := setupTestDB(t)
-	store := NewPGStore(pool)
+// seedFixture inserts a healthy backend, an available model alias (reasoning
+// off), an identity + API key, and a rate-limit policy. Returns aliceID.
+func seedFixture(t *testing.T, pool *pgxpool.Pool) string {
+	t.Helper()
 	ctx := context.Background()
-
-	// Seed a healthy backend + an available model alias (reasoning off).
 	_, err := pool.Exec(ctx, `
 		INSERT INTO catalog.backends (key, name, namespace, kind, model, service_url, deployed, healthy)
 		VALUES ('default/qwen', 'qwen', 'default', 'vLLM', 'Qwen/Qwen3-27B', 'http://vllm', true, true)`)
@@ -132,8 +131,6 @@ func TestPGStore(t *testing.T) {
 		INSERT INTO catalog.models (key, namespace, model_id, display_name, context_length, backend_ref, reasoning_config, available)
 		VALUES ('default/qwen3-27b', 'default', 'qwen3-27b', 'Qwen3 27B', 131072, 'qwen', '{"enable_thinking":false}'::jsonb, true)`)
 	require.NoError(t, err)
-
-	// Seed an identity + API key + a rate-limit policy targeting it.
 	var aliceID string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO identity.identities (key, kind) VALUES ('default/alice', 'user') RETURNING id`).Scan(&aliceID))
@@ -144,6 +141,15 @@ func TestPGStore(t *testing.T) {
 		INSERT INTO permissions.policies (subject_kind, subject_key, rate_limits)
 		VALUES ('user', 'default/alice', '{"rpm":60,"tpm":100000}'::jsonb)`)
 	require.NoError(t, err)
+	return aliceID
+}
+
+// TestPGStore exercises the Store reads against the contract fixture.
+func TestPGStore(t *testing.T) {
+	pool, _ := setupTestDB(t)
+	store := NewPGStore(pool)
+	ctx := context.Background()
+	aliceID := seedFixture(t, pool)
 
 	// Catalog: alias -> backend_url + backend_model_id (rewrite target) + available.
 	entries, err := store.ListCatalog(ctx)
@@ -157,27 +163,22 @@ func TestPGStore(t *testing.T) {
 	require.NotNil(t, e.ReasoningConfig.EnableThinking)
 	assert.False(t, *e.ReasoningConfig.EnableThinking)
 
-	// API key -> identity_id; unknown -> ErrNotFound.
-	gotID, err := store.APIKeyByHash(ctx, "h1")
+	// API keys.
+	keys, err := store.AllAPIKeys(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, aliceID, gotID)
-	_, err = store.APIKeyByHash(ctx, "nope")
-	assert.ErrorIs(t, err, ErrNotFound)
+	require.Len(t, keys, 1)
+	assert.Equal(t, "h1", keys[0].KeyHash)
+	assert.Equal(t, aliceID, keys[0].IdentityID)
 
-	// Broad-default capabilities (wildcard) for an active identity.
-	caps, err := store.Capabilities(ctx, aliceID)
+	// Capabilities (broad-default wildcard).
+	caps, err := store.AllCapabilities(ctx)
 	require.NoError(t, err)
 	require.Len(t, caps, 1)
-	assert.Equal(t, Capability{Resource: "*", Action: "*"}, caps[0])
+	assert.Equal(t, Capability{IdentityID: aliceID, Resource: "*", Action: "*"}, caps[0])
 
-	// Per-identity rate limits; absent = unlimited (ErrNotFound).
-	rl, err := store.IdentityRateLimits(ctx, aliceID)
+	// Rate limits.
+	rl, err := store.AllRateLimits(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, IdentityRateLimits{RPM: 60, TPM: 100000}, rl)
-
-	var bobID string
-	require.NoError(t, pool.QueryRow(ctx, `
-		INSERT INTO identity.identities (key, kind) VALUES ('default/bob', 'user') RETURNING id`).Scan(&bobID))
-	_, err = store.IdentityRateLimits(ctx, bobID)
-	assert.ErrorIs(t, err, ErrNotFound, "no rate-limit policy -> unlimited")
+	require.Len(t, rl, 1)
+	assert.Equal(t, IdentityRateLimits{IdentityID: aliceID, RPM: 60, TPM: 100000}, rl[0])
 }

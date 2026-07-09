@@ -1,6 +1,6 @@
 // Package snapshot is the gateway's read-only view of control-plane state
 // (catalog, API keys, capabilities, rate limits), consumed directly from the
-// shared Postgres. The gateway owns its Redis cache + freshness via LISTEN/NOTIFY
+// shared Postgres. The gateway owns its cache + freshness via LISTEN/NOTIFY
 // (HOR-247). No request-path calls to control-plane.
 package snapshot
 
@@ -24,8 +24,7 @@ type CatalogEntry struct {
 }
 
 // DefaultParams are default sampling parameters injected when the client omits
-// them. Pointer fields keep "not set" distinct from zero. Mirrors the
-// (ripped) registry.DefaultParams + control-plane Model.defaultParams.
+// them. Pointer fields keep "not set" distinct from zero.
 type DefaultParams struct {
 	Temperature       *float64 `json:"temperature,omitempty"`
 	TopP              *float64 `json:"top_p,omitempty"`
@@ -56,16 +55,24 @@ type ModelRateLimits struct {
 	TPM *int `json:"tpm,omitempty"`
 }
 
+// APIKey is an active API key (hash -> identity) from identity.api_keys.
+type APIKey struct {
+	KeyHash    string
+	IdentityID string
+}
+
 // Capability is a row of permissions.effective_capabilities: an identity is
 // granted (resource, action). Wildcard '*' matches any.
 type Capability struct {
-	Resource string
-	Action   string
+	IdentityID string
+	Resource   string
+	Action     string
 }
 
 // IdentityRateLimits is a per-identity throughput limit (from
 // permissions.effective_rate_limits). The gateway enforces via Redis.
 type IdentityRateLimits struct {
-	RPM int
-	TPM int
+	IdentityID string
+	RPM        int
+	TPM        int
 }
