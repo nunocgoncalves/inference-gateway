@@ -34,8 +34,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
-	case "migrate":
-		runMigrate()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -48,8 +46,6 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  serve              Start the API gateway server")
-	fmt.Fprintln(os.Stderr, "  migrate up         Run all pending migrations, then exit")
-	fmt.Fprintln(os.Stderr, "  migrate down [N]   Roll back N migrations (default 1), then exit")
 }
 
 func runServe() error {
@@ -144,12 +140,9 @@ func runServe() error {
 	}
 }
 
-// runMigrate is a no-op: the gateway owns no tables. The control-plane's
+// runMigrate is removed — the gateway owns no tables; the control-plane's
 // migrate job creates the schemas (identity, permissions, catalog) the gateway
-// reads. Kept for chart/init-container compatibility.
-func runMigrate() {
-	fmt.Println("gateway owns no tables; migrations are handled by the control-plane. Nothing to do.")
-}
+// reads. There is no `migrate` subcommand.
 
 func newLogger(cfg config.LoggingConfig) *slog.Logger {
 	var level slog.Level
