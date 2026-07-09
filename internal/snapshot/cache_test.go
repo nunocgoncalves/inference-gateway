@@ -22,6 +22,9 @@ func TestCache_refreshAndRead(t *testing.T) {
 	require.NoError(t, cache.Start(ctx))
 	t.Cleanup(cache.Stop)
 
+	// Freshly started -> snapshot is fresh (readiness gate).
+	assert.True(t, cache.Fresh(time.Minute), "snapshot should be fresh after Start")
+
 	// Catalog entry.
 	e, ok := cache.CatalogEntry("qwen3-27b")
 	require.True(t, ok)
