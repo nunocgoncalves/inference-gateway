@@ -36,7 +36,7 @@ func HashKey(token string) string {
 // Auth validates a Bearer API key against the control-plane identity snapshot
 // (key_hash -> identity_id) and injects the identity_id into the request
 // context. 401 on missing/invalid/revoked keys.
-func Auth(cache *snapshot.Cache, logger *slog.Logger) func(http.Handler) http.Handler {
+func Auth(cache snapshot.Reader, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractBearerToken(r)

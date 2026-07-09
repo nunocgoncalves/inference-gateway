@@ -22,7 +22,7 @@ import (
 // and proxies. No weighted LB / health checker — the catalog's `available` flag
 // is the health signal (set by the control-plane ModelBackend reconciler).
 type Handler struct {
-	cache   *snapshot.Cache
+	cache   snapshot.Reader
 	limiter ratelimit.Limiter
 	metrics *metrics.Metrics
 	client  *http.Client
@@ -30,7 +30,7 @@ type Handler struct {
 }
 
 // NewHandler creates a new proxy handler.
-func NewHandler(cache *snapshot.Cache, limiter ratelimit.Limiter, m *metrics.Metrics, logger *slog.Logger) *Handler {
+func NewHandler(cache snapshot.Reader, limiter ratelimit.Limiter, m *metrics.Metrics, logger *slog.Logger) *Handler {
 	return &Handler{
 		cache:   cache,
 		limiter: limiter,

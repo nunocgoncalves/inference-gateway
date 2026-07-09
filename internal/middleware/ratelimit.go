@@ -24,7 +24,7 @@ type RateLimitConfig struct {
 // counter is in Redis, keyed by identity_id (shared across the identity's keys
 // and across pods). TPM is a pre-flight check; the actual TPM increment happens
 // after the response (in the proxy handler).
-func RateLimit(cache *snapshot.Cache, limiter ratelimit.Limiter, cfg RateLimitConfig, m *metrics.Metrics, logger *slog.Logger) func(http.Handler) http.Handler {
+func RateLimit(cache snapshot.Reader, limiter ratelimit.Limiter, cfg RateLimitConfig, m *metrics.Metrics, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			identityID := IdentityIDFromContext(r.Context())

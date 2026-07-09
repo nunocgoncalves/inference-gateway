@@ -21,7 +21,7 @@ import (
 // If nil is passed to New, the server runs with stub handlers.
 type Deps struct {
 	ProxyHandler       *proxy.Handler
-	Cache              *snapshot.Cache
+	Cache              snapshot.Reader
 	Limiter            ratelimit.Limiter
 	RateLimitCfg       middleware.RateLimitConfig
 	AdminKey           string
