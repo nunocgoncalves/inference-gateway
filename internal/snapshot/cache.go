@@ -21,11 +21,12 @@ type Cache struct {
 	logger   *slog.Logger
 	interval time.Duration
 
-	mu      sync.RWMutex
-	catalog map[string]CatalogEntry
-	apiKeys map[string]string
-	caps    map[string][]Capability
-	rl      map[string]IdentityRateLimits
+	mu          sync.RWMutex
+	catalog     map[string]CatalogEntry
+	apiKeys     map[string]string
+	caps        map[string][]Capability
+	rl          map[string]IdentityRateLimits
+	lastRefresh time.Time
 
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -99,6 +100,7 @@ func (c *Cache) refresh(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.catalog, c.apiKeys, c.caps, c.rl = cat, kh, capMap, rlMap
+	c.lastRefresh = time.Now()
 	c.mu.Unlock()
 
 	c.logger.Debug("snapshot refreshed",
@@ -198,6 +200,15 @@ func (c *Cache) sleep(d time.Duration) bool {
 // on it before mutating the DB.
 func (c *Cache) ListenReady() <-chan struct{} {
 	return c.listenReady
+}
+
+// Fresh reports whether the snapshot has been refreshed within maxStaleness.
+// Used by the readiness probe so a pod with a dead LISTEN (stale beyond ~2x the
+// poll interval) drops from the Service LB instead of serving stale config.
+func (c *Cache) Fresh(maxStaleness time.Duration) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return time.Since(c.lastRefresh) <= maxStaleness
 }
 
 // CatalogEntry returns the catalog entry for an alias.
