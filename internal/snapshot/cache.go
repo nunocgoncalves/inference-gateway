@@ -219,6 +219,17 @@ func (c *Cache) CatalogEntry(modelID string) (CatalogEntry, bool) {
 	return e, ok
 }
 
+// ListCatalog returns all catalog entries (for /v1/models + the debug endpoint).
+func (c *Cache) ListCatalog() []CatalogEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]CatalogEntry, 0, len(c.catalog))
+	for _, e := range c.catalog {
+		out = append(out, e)
+	}
+	return out
+}
+
 // IdentityByAPIKey resolves an API key hash to its identity_id.
 func (c *Cache) IdentityByAPIKey(keyHash string) (string, bool) {
 	c.mu.RLock()
