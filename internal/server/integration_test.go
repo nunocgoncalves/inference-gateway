@@ -113,7 +113,6 @@ func TestServer_EndToEnd(t *testing.T) {
 		ProxyHandler:       proxyHandler,
 		Cache:              cache,
 		Limiter:            limiter,
-		RateLimitCfg:       middleware.RateLimitConfig{DefaultRPM: 10, DefaultTPM: 1000},
 		AdminKey:           "admin-secret",
 		ReadinessStaleness: 60 * time.Second,
 	}

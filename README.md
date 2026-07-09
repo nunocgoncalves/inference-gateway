@@ -80,7 +80,6 @@ server:       {port: 8080, read_timeout: 30s, write_timeout: 300s, idle_timeout:
 database:     {url: "${DATABASE_URL}", max_open_conns: 25, max_idle_conns: 10}
 redis:        {url: "${REDIS_URL}"}
 auth:         {admin_key: "${ADMIN_API_KEY}"}        # /admin/v1/snapshot only
-rate_limits:  {default_rpm: 60, default_tpm: 100000} # when no per-identity policy
 snapshot:
   refresh_interval: 30s       # poll fallback (LISTEN/NOTIFY drives prompt updates)
   readiness_staleness: 60s    # /readyz unhealthy if older than this

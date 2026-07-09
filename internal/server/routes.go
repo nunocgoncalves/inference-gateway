@@ -42,7 +42,7 @@ func newRouter(logger *slog.Logger, m *metrics.Metrics, deps *Deps) http.Handler
 				r.Use(gatewaymw.Auth(deps.Cache, logger))
 			}
 			if deps.Limiter != nil {
-				r.Use(gatewaymw.RateLimit(deps.Cache, deps.Limiter, deps.RateLimitCfg, m, logger))
+				r.Use(gatewaymw.RateLimit(deps.Cache, deps.Limiter, m, logger))
 			}
 			if m != nil {
 				r.Use(gatewaymw.Metrics(m))

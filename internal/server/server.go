@@ -11,7 +11,6 @@ import (
 
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
-	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
 	"github.com/nunocgoncalves/inference-gateway/internal/proxy"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 	"github.com/nunocgoncalves/inference-gateway/internal/snapshot"
@@ -23,7 +22,6 @@ type Deps struct {
 	ProxyHandler       *proxy.Handler
 	Cache              snapshot.Reader
 	Limiter            ratelimit.Limiter
-	RateLimitCfg       middleware.RateLimitConfig
 	AdminKey           string
 	ReadinessStaleness time.Duration // /readyz is unhealthy if the snapshot is older than this
 }

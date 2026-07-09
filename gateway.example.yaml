@@ -21,10 +21,6 @@ redis:
 auth:
   admin_key: "${ADMIN_API_KEY}"
 
-rate_limits:
-  default_rpm: 60           # Default requests per minute per API key
-  default_tpm: 100000       # Default tokens per minute per identity (absent per-identity limit)
-
 # The snapshot cache is the gateway's in-memory view of control-plane state
 # (catalog, API keys, capabilities, rate-limit limits). Refreshed on start, on
 # LISTEN/NOTIFY (catalog_changed/api_keys_changed/permissions_changed), and on

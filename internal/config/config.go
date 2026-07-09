@@ -10,13 +10,12 @@ import (
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	Database   DatabaseConfig   `yaml:"database"`
-	Redis      RedisConfig      `yaml:"redis"`
-	Auth       AuthConfig       `yaml:"auth"`
-	RateLimits RateLimitsConfig `yaml:"rate_limits"`
-	Snapshot   SnapshotConfig   `yaml:"snapshot"`
-	Logging    LoggingConfig    `yaml:"logging"`
+	Server   ServerConfig   `yaml:"server"`
+	Database DatabaseConfig `yaml:"database"`
+	Redis    RedisConfig    `yaml:"redis"`
+	Auth     AuthConfig     `yaml:"auth"`
+	Snapshot SnapshotConfig `yaml:"snapshot"`
+	Logging  LoggingConfig  `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -38,11 +37,6 @@ type RedisConfig struct {
 
 type AuthConfig struct {
 	AdminKey string `yaml:"admin_key"`
-}
-
-type RateLimitsConfig struct {
-	DefaultRPM int `yaml:"default_rpm"`
-	DefaultTPM int `yaml:"default_tpm"`
 }
 
 // SnapshotConfig configures the in-memory control-plane snapshot cache
@@ -95,10 +89,6 @@ func defaults() *Config {
 		Database: DatabaseConfig{
 			MaxOpenConns: 25,
 			MaxIdleConns: 10,
-		},
-		RateLimits: RateLimitsConfig{
-			DefaultRPM: 60,
-			DefaultTPM: 100000,
 		},
 		Snapshot: SnapshotConfig{
 			RefreshInterval:    30 * time.Second,

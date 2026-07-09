@@ -15,7 +15,6 @@ import (
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
 	"github.com/nunocgoncalves/inference-gateway/internal/database"
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
-	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
 	"github.com/nunocgoncalves/inference-gateway/internal/proxy"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 	"github.com/nunocgoncalves/inference-gateway/internal/server"
@@ -107,13 +106,9 @@ func runServe() error {
 
 	// --- Create server with all deps ---
 	srv := server.New(cfg, logger, &server.Deps{
-		ProxyHandler: proxyHandler,
-		Cache:        cache,
-		Limiter:      limiter,
-		RateLimitCfg: middleware.RateLimitConfig{
-			DefaultRPM: cfg.RateLimits.DefaultRPM,
-			DefaultTPM: cfg.RateLimits.DefaultTPM,
-		},
+		ProxyHandler:       proxyHandler,
+		Cache:              cache,
+		Limiter:            limiter,
 		AdminKey:           cfg.Auth.AdminKey,
 		ReadinessStaleness: cfg.Snapshot.ReadinessStaleness,
 	}, m)
