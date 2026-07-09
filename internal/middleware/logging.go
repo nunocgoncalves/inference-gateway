@@ -4,22 +4,20 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
-
-	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 )
 
 // Logging returns middleware that emits a structured log line for every
 // completed request. The log includes:
 //
-//   - request_id  (from RequestID middleware)
-//   - method      (HTTP method)
-//   - path        (URL path)
-//   - status      (HTTP status code)
-//   - duration_ms (request duration in milliseconds)
-//   - model       (from MetricsData, if set by proxy handler)
-//   - key_prefix  (from authenticated APIKey context, if present)
-//   - backend_url (from MetricsData, if set by proxy handler)
-//   - streaming   (from MetricsData, if set by proxy handler)
+//   - request_id   (from RequestID middleware)
+//   - method       (HTTP method)
+//   - path         (URL Path)
+//   - status       (HTTP status code)
+//   - duration_ms  (request duration in milliseconds)
+//   - model        (from MetricsData, if set by proxy handler)
+//   - identity_id  (from the authenticated context, if present)
+//   - backend_url  (from MetricsData, if set by proxy handler)
+//   - streaming    (from MetricsData, if set by proxy handler)
 //
 // This middleware should be placed early in the chain (after RequestID)
 // so it wraps the full request lifecycle.
@@ -58,9 +56,9 @@ func Logging(logger *slog.Logger) func(http.Handler) http.Handler {
 				}
 			}
 
-			// Enrich with API key prefix if authenticated.
-			if apiKey := auth.APIKeyFromContext(r.Context()); apiKey != nil {
-				attrs = append(attrs, slog.String("key_prefix", apiKey.KeyPrefix))
+			// Enrich with the authenticated identity id, if present.
+			if identityID := IdentityIDFromContext(r.Context()); identityID != "" {
+				attrs = append(attrs, slog.String("identity_id", identityID))
 			}
 
 			// Choose log level based on status code.

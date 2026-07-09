@@ -23,16 +23,15 @@ auth:
 
 rate_limits:
   default_rpm: 60           # Default requests per minute per API key
-  default_tpm: 100000       # Default tokens per minute per API key
+  default_tpm: 100000       # Default tokens per minute per identity (absent per-identity limit)
 
-health_check:
-  interval: 10s             # How often to probe backend /health endpoints
-  timeout: 5s               # Per-probe timeout
-  healthy_threshold: 3      # Consecutive successes to mark backend healthy
-  unhealthy_threshold: 1    # Consecutive failures to mark backend unhealthy
-
-registry:
-  cache_refresh_interval: 30s  # How often to refresh the model cache from PostgreSQL
+# The snapshot cache is the gateway's in-memory view of control-plane state
+# (catalog, API keys, capabilities, rate-limit limits). Refreshed on start, on
+# LISTEN/NOTIFY (catalog_changed/api_keys_changed/permissions_changed), and on
+# the poll fallback. Redis is used only for the rate-limit counters.
+snapshot:
+  refresh_interval: 30s     # Poll fallback (LISTEN/NOTIFY drives prompt updates)
+  readiness_staleness: 60s  # /readyz is unhealthy if the snapshot is older than this
 
 logging:
   level: info               # debug, info, warn, error

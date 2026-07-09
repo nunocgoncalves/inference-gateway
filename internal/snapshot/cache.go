@@ -211,6 +211,13 @@ func (c *Cache) Fresh(maxStaleness time.Duration) bool {
 	return time.Since(c.lastRefresh) <= maxStaleness
 }
 
+// LastRefresh returns the time of the last successful snapshot refresh.
+func (c *Cache) LastRefresh() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastRefresh
+}
+
 // CatalogEntry returns the catalog entry for an alias.
 func (c *Cache) CatalogEntry(modelID string) (CatalogEntry, bool) {
 	c.mu.RLock()
