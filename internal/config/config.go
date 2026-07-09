@@ -10,14 +10,13 @@ import (
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	Database    DatabaseConfig    `yaml:"database"`
-	Redis       RedisConfig       `yaml:"redis"`
-	Auth        AuthConfig        `yaml:"auth"`
-	RateLimits  RateLimitsConfig  `yaml:"rate_limits"`
-	HealthCheck HealthCheckConfig `yaml:"health_check"`
-	Registry    RegistryConfig    `yaml:"registry"`
-	Logging     LoggingConfig     `yaml:"logging"`
+	Server     ServerConfig     `yaml:"server"`
+	Database   DatabaseConfig   `yaml:"database"`
+	Redis      RedisConfig      `yaml:"redis"`
+	Auth       AuthConfig       `yaml:"auth"`
+	RateLimits RateLimitsConfig `yaml:"rate_limits"`
+	Snapshot   SnapshotConfig   `yaml:"snapshot"`
+	Logging    LoggingConfig    `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -46,15 +45,12 @@ type RateLimitsConfig struct {
 	DefaultTPM int `yaml:"default_tpm"`
 }
 
-type HealthCheckConfig struct {
-	Interval           time.Duration `yaml:"interval"`
-	Timeout            time.Duration `yaml:"timeout"`
-	HealthyThreshold   int           `yaml:"healthy_threshold"`
-	UnhealthyThreshold int           `yaml:"unhealthy_threshold"`
-}
-
-type RegistryConfig struct {
-	CacheRefreshInterval time.Duration `yaml:"cache_refresh_interval"`
+// SnapshotConfig configures the in-memory control-plane snapshot cache
+// (catalog/api keys/capabilities/rate-limits). Redis is used only for the
+// rate-limit counters.
+type SnapshotConfig struct {
+	RefreshInterval    time.Duration `yaml:"refresh_interval"`    // poll fallback (LISTEN/NOTIFY drives prompt updates)
+	ReadinessStaleness time.Duration `yaml:"readiness_staleness"` // /readyz is unhealthy if the snapshot is older than this
 }
 
 type LoggingConfig struct {
@@ -104,14 +100,9 @@ func defaults() *Config {
 			DefaultRPM: 60,
 			DefaultTPM: 100000,
 		},
-		HealthCheck: HealthCheckConfig{
-			Interval:           10 * time.Second,
-			Timeout:            5 * time.Second,
-			HealthyThreshold:   3,
-			UnhealthyThreshold: 1,
-		},
-		Registry: RegistryConfig{
-			CacheRefreshInterval: 30 * time.Second,
+		Snapshot: SnapshotConfig{
+			RefreshInterval:    30 * time.Second,
+			ReadinessStaleness: 60 * time.Second,
 		},
 		Logging: LoggingConfig{
 			Level:  "info",

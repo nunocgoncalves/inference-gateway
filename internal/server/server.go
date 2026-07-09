@@ -9,24 +9,23 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/nunocgoncalves/inference-gateway/internal/admin"
-	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
 	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
 	"github.com/nunocgoncalves/inference-gateway/internal/proxy"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
+	"github.com/nunocgoncalves/inference-gateway/internal/snapshot"
 )
 
 // Deps holds all dependencies needed by the server to wire routing.
 // If nil is passed to New, the server runs with stub handlers.
 type Deps struct {
-	ProxyHandler *proxy.Handler
-	AdminHandler *admin.Handler
-	AuthStore    auth.Store
-	Limiter      ratelimit.Limiter
-	RateLimitCfg middleware.RateLimitConfig
-	AdminKey     string
+	ProxyHandler       *proxy.Handler
+	Cache              *snapshot.Cache
+	Limiter            ratelimit.Limiter
+	RateLimitCfg       middleware.RateLimitConfig
+	AdminKey           string
+	ReadinessStaleness time.Duration // /readyz is unhealthy if the snapshot is older than this
 }
 
 // Server is the main HTTP server for the gateway.

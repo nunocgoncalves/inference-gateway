@@ -12,17 +12,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/nunocgoncalves/inference-gateway/internal/admin"
-	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 	"github.com/nunocgoncalves/inference-gateway/internal/config"
 	"github.com/nunocgoncalves/inference-gateway/internal/database"
-	"github.com/nunocgoncalves/inference-gateway/internal/loadbalancer"
 	"github.com/nunocgoncalves/inference-gateway/internal/metrics"
 	"github.com/nunocgoncalves/inference-gateway/internal/middleware"
 	"github.com/nunocgoncalves/inference-gateway/internal/proxy"
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
-	"github.com/nunocgoncalves/inference-gateway/internal/registry"
 	"github.com/nunocgoncalves/inference-gateway/internal/server"
+	"github.com/nunocgoncalves/inference-gateway/internal/snapshot"
 )
 
 func main() {
@@ -95,47 +92,34 @@ func runServe() error {
 	}
 	logger.Info("connected to redis")
 
-	// --- Create stores ---
-	registryStore := registry.NewPGStore(pool)
-	authStore := auth.NewPGStore(pool)
-
-	// --- Create rate limiter ---
+	// --- Create rate limiter (Redis — the only shared state, for rate-limit counters) ---
 	limiter := ratelimit.NewRedisLimiter(rdb)
 
-	// --- Create registry cache ---
-	cache := registry.NewCache(registryStore, rdb, logger, cfg.Registry.CacheRefreshInterval)
+	// --- Create snapshot cache (in-memory, per-pod; LISTEN/NOTIFY-synced) ---
+	cache := snapshot.NewCache(snapshot.NewPGStore(pool), cfg.Database.URL, logger, cfg.Snapshot.RefreshInterval)
 	if err := cache.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start registry cache: %w", err)
+		return fmt.Errorf("failed to start snapshot cache: %w", err)
 	}
 	defer cache.Stop()
-	logger.Info("registry cache started")
+	logger.Info("snapshot cache started")
 
 	// --- Create metrics ---
 	m := metrics.New(prometheus.NewRegistry())
 
-	// --- Create health checker ---
-	hc := loadbalancer.NewHealthChecker(loadbalancer.HealthCheckConfig{
-		Interval:           cfg.HealthCheck.Interval,
-		Timeout:            cfg.HealthCheck.Timeout,
-		HealthyThreshold:   cfg.HealthCheck.HealthyThreshold,
-		UnhealthyThreshold: cfg.HealthCheck.UnhealthyThreshold,
-	}, logger, nil, m)
-
 	// --- Create handlers ---
-	proxyHandler := proxy.NewHandler(cache, limiter, hc, m, logger)
-	adminHandler := admin.NewHandler(registryStore, authStore, cache, logger)
+	proxyHandler := proxy.NewHandler(cache, limiter, m, logger)
 
 	// --- Create server with all deps ---
 	srv := server.New(cfg, logger, &server.Deps{
 		ProxyHandler: proxyHandler,
-		AdminHandler: adminHandler,
-		AuthStore:    authStore,
+		Cache:        cache,
 		Limiter:      limiter,
 		RateLimitCfg: middleware.RateLimitConfig{
 			DefaultRPM: cfg.RateLimits.DefaultRPM,
 			DefaultTPM: cfg.RateLimits.DefaultTPM,
 		},
-		AdminKey: cfg.Auth.AdminKey,
+		AdminKey:           cfg.Auth.AdminKey,
+		ReadinessStaleness: cfg.Snapshot.ReadinessStaleness,
 	}, m)
 
 	// Start server in a goroutine.
@@ -160,51 +144,11 @@ func runServe() error {
 	}
 }
 
+// runMigrate is a no-op: the gateway owns no tables. The control-plane's
+// migrate job creates the schemas (identity, permissions, catalog) the gateway
+// reads. Kept for chart/init-container compatibility.
 func runMigrate() {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		fmt.Fprintln(os.Stderr, "DATABASE_URL environment variable is required")
-		os.Exit(1)
-	}
-
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: gateway migrate <up|down> [N]")
-		os.Exit(1)
-	}
-
-	direction := os.Args[2]
-
-	switch direction {
-	case "up":
-		fmt.Println("running migrations up...")
-		if err := database.MigrateUp(dbURL); err != nil {
-			fmt.Fprintf(os.Stderr, "migration failed: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("migrations completed successfully")
-
-	case "down":
-		steps := 1
-		if len(os.Args) > 3 {
-			if _, err := fmt.Sscanf(os.Args[3], "%d", &steps); err != nil {
-				fmt.Fprintf(os.Stderr, "invalid step count: %s\n", os.Args[3])
-				os.Exit(1)
-			}
-		}
-		fmt.Printf("rolling back %d migration(s)...\n", steps)
-		if err := database.MigrateDown(dbURL, steps); err != nil {
-			fmt.Fprintf(os.Stderr, "rollback failed: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("rollback completed successfully")
-
-	default:
-		fmt.Fprintf(os.Stderr, "unknown migrate direction: %s\n", direction)
-		fmt.Fprintln(os.Stderr, "Usage: gateway migrate <up|down> [N]")
-		os.Exit(1)
-	}
-
-	// Exit after migration — designed for init container usage.
+	fmt.Println("gateway owns no tables; migrations are handled by the control-plane. Nothing to do.")
 }
 
 func newLogger(cfg config.LoggingConfig) *slog.Logger {

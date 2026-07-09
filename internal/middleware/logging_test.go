@@ -11,8 +11,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/nunocgoncalves/inference-gateway/internal/auth"
 )
 
 // newBufferLogger returns a logger that writes JSON to the provided buffer.
@@ -82,7 +80,7 @@ func TestLogging_IncludesModelAndBackend(t *testing.T) {
 	assert.Equal(t, true, m["streaming"])
 }
 
-func TestLogging_IncludesKeyPrefix(t *testing.T) {
+func TestLogging_IncludesIdentityID(t *testing.T) {
 	var buf bytes.Buffer
 	logger := newBufferLogger(&buf)
 
@@ -93,20 +91,13 @@ func TestLogging_IncludesKeyPrefix(t *testing.T) {
 	handler := RequestID(Logging(logger)(inner))
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
-	key := &auth.APIKey{
-		ID:        "key-1",
-		Name:      "test",
-		KeyPrefix: "ml-abc12345",
-		Active:    true,
-	}
-	ctx := auth.WithAPIKey(req.Context(), key)
-	req = req.WithContext(ctx)
+	req = req.WithContext(WithIdentityID(req.Context(), "identity-1"))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	m := parseLogLine(t, &buf)
-	assert.Equal(t, "ml-abc12345", m["key_prefix"])
+	assert.Equal(t, "identity-1", m["identity_id"])
 }
 
 func TestLogging_WarnOn4xx(t *testing.T) {
@@ -187,7 +178,7 @@ func TestLogging_NoMetricsData(t *testing.T) {
 	assert.NotContains(t, m, "streaming")
 }
 
-func TestLogging_NoAPIKey(t *testing.T) {
+func TestLogging_NoIdentity(t *testing.T) {
 	var buf bytes.Buffer
 	logger := newBufferLogger(&buf)
 
@@ -202,7 +193,7 @@ func TestLogging_NoAPIKey(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	m := parseLogLine(t, &buf)
-	assert.NotContains(t, m, "key_prefix")
+	assert.NotContains(t, m, "identity_id")
 }
 
 func TestLogging_RequestIDFromContext(t *testing.T) {
