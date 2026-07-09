@@ -8,19 +8,19 @@ package snapshot
 // routes on: alias -> backend_url (+ backend_model_id for the model-field
 // rewrite) + per-alias config, filtered to available rows.
 type CatalogEntry struct {
-	ModelID         string // client-facing alias
-	DisplayName     string
-	ContextLength   int
-	Capabilities    []string
-	BackendRef      string
-	BackendKind     string
-	BackendModelID  string // HuggingFace id; the gateway rewrites the alias -> this
-	BackendURL      string
-	DefaultParams   DefaultParams
-	ReasoningConfig ReasoningConfig
-	Transforms      Transforms
-	RateLimits      ModelRateLimits
-	Available       bool
+	ModelID         string          `json:"model_id"` // client-facing alias
+	DisplayName     string          `json:"display_name"`
+	ContextLength   int             `json:"context_length"`
+	Capabilities    []string        `json:"capabilities"`
+	BackendRef      string          `json:"backend_ref"`
+	BackendKind     string          `json:"backend_kind"`
+	BackendModelID  string          `json:"backend_model_id"` // HuggingFace id; the gateway rewrites the alias -> this
+	BackendURL      string          `json:"backend_url"`
+	DefaultParams   DefaultParams   `json:"default_params"`
+	ReasoningConfig ReasoningConfig `json:"reasoning_config"`
+	Transforms      Transforms      `json:"transforms"`
+	RateLimits      ModelRateLimits `json:"rate_limits"`
+	Available       bool            `json:"available"`
 }
 
 // DefaultParams are default sampling parameters injected when the client omits

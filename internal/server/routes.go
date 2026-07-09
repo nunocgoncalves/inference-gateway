@@ -84,7 +84,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 
 // readinessHandler reports 200 if the snapshot is fresh, 503 otherwise — so a
 // pod with a dead LISTEN (stale beyond ReadinessStaleness) drops from the LB.
-func readinessHandler(cache *snapshot.Cache, staleness time.Duration) http.HandlerFunc {
+func readinessHandler(cache snapshot.Reader, staleness time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fresh := cache != nil && cache.Fresh(staleness)
 		status := http.StatusOK
@@ -104,7 +104,7 @@ func readinessHandler(cache *snapshot.Cache, staleness time.Duration) http.Handl
 // snapshotHandler exposes the gateway's consumed catalog snapshot (read-only,
 // for ops + the forge kindtest HOR-324). No secrets — API key hashes are not
 // exposed, only counts.
-func snapshotHandler(cache *snapshot.Cache, staleness time.Duration) http.HandlerFunc {
+func snapshotHandler(cache snapshot.Reader, staleness time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{

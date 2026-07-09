@@ -193,6 +193,19 @@ func (c *Cache) sleep(d time.Duration) bool {
 	}
 }
 
+// Reader is the read-only snapshot view consumed by the proxy/middleware/server.
+// The concrete *Cache implements it; tests use a fake (B+C interface boundary)
+// so unit tests need no Postgres/LISTEN.
+type Reader interface {
+	CatalogEntry(modelID string) (CatalogEntry, bool)
+	ListCatalog() []CatalogEntry
+	IdentityByAPIKey(keyHash string) (string, bool)
+	Capabilities(identityID string) []Capability
+	RateLimits(identityID string) (IdentityRateLimits, bool)
+	Fresh(maxStaleness time.Duration) bool
+	LastRefresh() time.Time
+}
+
 // --- Request-path reads (memory; no PG/Redis round-trip) ---
 
 // ListenReady returns a channel that is closed once the LISTEN connection is
