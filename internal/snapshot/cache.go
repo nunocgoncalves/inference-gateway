@@ -16,10 +16,11 @@ import (
 // round-trip); Redis remains for the rate-limit windows. This honors HOR-243's
 // "consumers own their cache + freshness via LISTEN/NOTIFY" contract.
 type Cache struct {
-	store    Store
-	connStr  string
-	logger   *slog.Logger
-	interval time.Duration
+	store         Store
+	connStr       string
+	logger        *slog.Logger
+	interval      time.Duration
+	retryInterval time.Duration
 
 	mu          sync.RWMutex
 	catalog     map[string]CatalogEntry
@@ -38,15 +39,28 @@ type Cache struct {
 // NewCache wraps a Store. connStr is used for the dedicated LISTEN connection
 // (pool connections aren't held for LISTEN).
 func NewCache(store Store, connStr string, logger *slog.Logger, refreshInterval time.Duration) *Cache {
-	return &Cache{store: store, connStr: connStr, logger: logger, interval: refreshInterval, listenReady: make(chan struct{})}
+	return &Cache{store: store, connStr: connStr, logger: logger, interval: refreshInterval, retryInterval: 5 * time.Second, listenReady: make(chan struct{})}
 }
 
 // Start loads the initial snapshot and starts the LISTEN + poll loops.
 func (c *Cache) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
-	if err := c.refresh(c.ctx); err != nil {
-		c.cancel()
-		return err
+	// Retry the initial refresh until the control-plane schemas are available —
+	// the gateway may start before the control-plane's migrate creates them
+	// (there is no wait-for-schemas init container). The container stays alive
+	// (blocked here) while /readyz keeps it NotReady until serving.
+	for {
+		if err := c.refresh(c.ctx); err == nil {
+			break
+		} else {
+			c.logger.Error("snapshot initial refresh failed; retrying", "error", err)
+			select {
+			case <-c.ctx.Done():
+				c.cancel()
+				return c.ctx.Err()
+			case <-time.After(c.retryInterval):
+			}
+		}
 	}
 	c.wg.Add(2)
 	go c.listenLoop()
