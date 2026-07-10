@@ -23,6 +23,11 @@ CREATE TABLE identity.api_keys (
     expires_at timestamptz,
     revoked_at timestamptz
 );
+CREATE VIEW identity.active_api_keys AS
+    SELECT key_hash, identity_id
+    FROM identity.api_keys
+    WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now());
+
 CREATE TABLE permissions.policies (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     subject_kind text NOT NULL,
