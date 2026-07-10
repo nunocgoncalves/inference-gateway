@@ -74,10 +74,9 @@ func (s *PGStore) ListCatalog(ctx context.Context) ([]CatalogEntry, error) {
 
 func (s *PGStore) AllAPIKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT key_hash, identity_id FROM identity.api_keys
-		WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`)
+		SELECT key_hash, identity_id FROM identity.active_api_keys`)
 	if err != nil {
-		return nil, fmt.Errorf("query api_keys: %w", err)
+		return nil, fmt.Errorf("query active_api_keys: %w", err)
 	}
 	defer rows.Close()
 
