@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -125,6 +126,63 @@ func TestHandler_ModelUnavailable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ChatCompletions(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+// TestHandler_NonStreaming_ContentLengthMatchesRewrittenBody reproduces HOR-374:
+// when rewrite_model_name changes the response body length, the gateway must not
+// forward the backend's stale Content-Length. A too-large Content-Length makes
+// ingress-nginx read past EOF and return 502.
+func TestHandler_NonStreaming_ContentLengthMatchesRewrittenBody(t *testing.T) {
+	cache := &fakeReader{
+		catalog: map[string]snapshot.CatalogEntry{
+			// alias "qwen3.6-27b" (11 chars) rewrites from a much longer backend id.
+			"qwen3.6-27b": {ModelID: "qwen3.6-27b", BackendModelID: "Qwen/Qwen3.6-27B-FP8", Available: true, Transforms: snapshot.Transforms{RewriteModelName: true}},
+		},
+		caps: map[string][]snapshot.Capability{"identity-1": {{Resource: "*"}}},
+	}
+
+	// Backend returns a body whose model field is the long backend id, and
+	// explicitly sets Content-Length to that body's length (as vLLM does).
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respBody := []byte(`{"model":"Qwen/Qwen3.6-27B-FP8","choices":[{"message":{"content":"hi"}}],"usage":{"total_tokens":5}}`)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(respBody)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(respBody)
+	}))
+	defer backend.Close()
+	e := cache.catalog["qwen3.6-27b"]
+	e.BackendURL = backend.URL
+	cache.catalog["qwen3.6-27b"] = e
+
+	h := NewHandler(cache, nil, nil, slog.Default())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		bytes.NewReader([]byte(`{"model":"qwen3.6-27b","messages":[{"role":"user","content":"hi"}]}`)))
+	req = req.WithContext(middleware.WithIdentityID(req.Context(), "identity-1"))
+	rec := httptest.NewRecorder()
+	h.ChatCompletions(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "non-streaming should succeed")
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "qwen3.6-27b", resp["model"], "response model rewritten to alias")
+
+	// The recorder does not synthesize Content-Length like a real net/http
+	// server does, so we assert the precise defect directly: the backend's
+	// stale Content-Length (sized for the longer, pre-rewrite body) must NOT
+	// be forwarded. A real net/http server then computes it from the body.
+	result := rec.Result()
+	defer result.Body.Close()
+	assert.Empty(t, result.Header.Get("Content-Length"),
+		"stale backend Content-Length must not be forwarded after body rewrite")
+	// And the rewritten body itself must be intact and shorter than the
+	// backend's — proving a forwarded stale value would have been too large.
+	backendBodyLen := len(`{"model":"Qwen/Qwen3.6-27B-FP8","choices":[{"message":{"content":"hi"}}],"usage":{"total_tokens":5}}`)
+	assert.Equal(t, rec.Body.Len(), len(rec.Body.Bytes()),
+		"rewritten body length is internally consistent")
+	assert.Less(t, rec.Body.Len(), backendBodyLen,
+		"test precondition: rewritten body is shorter than the backend body, so a stale Content-Length would be too large")
 }
 
 func TestHandler_ListModels_OnlyAvailable(t *testing.T) {

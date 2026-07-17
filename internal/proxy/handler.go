@@ -166,6 +166,11 @@ func (h *Handler) handleNonStreaming(
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
+	// The response body may have been rewritten above (model-name alias),
+	// which can change its length. Discard the backend's Content-Length so
+	// Go recomputes it from the actual bytes we write — a stale value would
+	// make ingress-nginx read past EOF and return 502 to the client.
+	w.Header().Del("Content-Length")
 	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(respBody); err != nil {
 		h.logger.Error("failed to write backend response", "model", entry.ModelID, "error", err)
