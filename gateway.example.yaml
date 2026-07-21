@@ -16,7 +16,8 @@ database:
   max_idle_conns: 10
 
 redis:
-  url: "${REDIS_URL}"       # redis://host:6379/0
+  url: "${REDIS_URL}"            # redis://host:6379/0 (plaintext) or rediss://host:6379/0 (TLS)
+  ca_file: "${REDIS_TLS_CA_FILE}"  # PEM CA cert to verify rediss:// (internal CA); empty for plaintext
 
 auth:
   admin_key: "${ADMIN_API_KEY}"
