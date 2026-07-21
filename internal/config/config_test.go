@@ -96,3 +96,14 @@ func TestLoad_PortEnvOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3000, cfg.Server.Port)
 }
+
+func TestLoad_RedisTLSEnvOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test")
+	t.Setenv("REDIS_URL", "rediss://redis:6379/0")
+	t.Setenv("REDIS_TLS_CA_FILE", "/etc/iterabase/internal-ca/ca.crt")
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.Equal(t, "/etc/iterabase/internal-ca/ca.crt", cfg.Redis.CAFile)
+	assert.Equal(t, "rediss://redis:6379/0", cfg.Redis.URL)
+}

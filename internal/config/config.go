@@ -32,7 +32,8 @@ type DatabaseConfig struct {
 }
 
 type RedisConfig struct {
-	URL string `yaml:"url"`
+	URL    string `yaml:"url"`
+	CAFile string `yaml:"ca_file"` // PEM CA cert to verify rediss:// (env REDIS_TLS_CA_FILE); empty = plaintext
 }
 
 type AuthConfig struct {
@@ -109,6 +110,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("REDIS_URL"); v != "" {
 		cfg.Redis.URL = v
+	}
+	if v := os.Getenv("REDIS_TLS_CA_FILE"); v != "" {
+		cfg.Redis.CAFile = v
 	}
 	if v := os.Getenv("ADMIN_API_KEY"); v != "" {
 		cfg.Auth.AdminKey = v

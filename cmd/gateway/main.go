@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"os"
@@ -76,9 +78,9 @@ func runServe() error {
 	logger.Info("connected to database")
 
 	// --- Connect to Redis ---
-	redisOpts, err := redis.ParseURL(cfg.Redis.URL)
+	redisOpts, err := redisOptions(cfg.Redis)
 	if err != nil {
-		return fmt.Errorf("failed to parse redis URL: %w", err)
+		return err
 	}
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
@@ -133,6 +135,32 @@ func runServe() error {
 		}
 		return nil
 	}
+}
+
+// redisOptions parses cfg.Redis.URL into go-redis options and, when a CA file
+// is configured (env REDIS_TLS_CA_FILE), installs it as the TLS root pool so a
+// rediss:// URL verifies against the internal CA. Without a CA file, TLS is
+// left to go-redis's ParseURL default (nil for redis://) — i.e. plaintext for
+// kind/E2E. The chart sets REDIS_TLS_CA_FILE + a rediss:// URL together (and
+// leaves both unset for plaintext), so the two never desync.
+func redisOptions(cfg config.RedisConfig) (*redis.Options, error) {
+	opts, err := redis.ParseURL(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse redis URL: %w", err)
+	}
+	if cfg.CAFile == "" {
+		return opts, nil
+	}
+	pemBytes, err := os.ReadFile(cfg.CAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read redis TLS CA file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("redis TLS CA file %q contains no certificate", cfg.CAFile)
+	}
+	opts.TLSConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	return opts, nil
 }
 
 // runMigrate is removed — the gateway owns no tables; the control-plane's
