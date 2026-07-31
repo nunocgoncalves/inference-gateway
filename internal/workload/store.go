@@ -81,7 +81,9 @@ func (s *PGStore) ResolvePoolBySpiffePrefix(ctx context.Context, spiffeID string
 // Todo); until that durable contract exists, a still-valid supervisor cert
 // from the same pool can open inference for a running turn. Requiring the
 // 'running' state closes the pre-dispatch window but not the same-pool
-// cross-worker window. See <finding> on store.go:65.
+// cross-worker window. This same-pool residual is an approved interim rescope
+// (PRD DEC-041, 2026-07-31); it is closed by HOR-249 and is NOT a hard block
+// on HOR-398.
 func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID string) (TurnScope, error) {
 	// runID + turnID are caller-supplied (headers); validate they are UUIDs
 	// before hitting the DB so a malformed-scope input is a 403 denial, not a
