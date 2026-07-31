@@ -433,3 +433,49 @@ func TestWorkloadMTLS_APIKeyPathRegression(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
+
+// The workload listener must be HTTP/2-only (ARCH-006): an mTLS client that
+// offers only HTTP/1.1 (no h2 ALPN) must be rejected. This does not need
+// Postgres/Redis — it only exercises the TLS + protocol configuration.
+func TestWorkloadMTLS_HTTP1_1Rejected(t *testing.T) {
+	ca, err := testca.New()
+	require.NoError(t, err)
+	serverCert, err := ca.Leaf(testca.LeafOpts{
+		SPIFFEID: wlSpiffePrefix + "gateway", DNSNames: []string{"localhost"}, IsServer: true,
+	})
+	require.NoError(t, err)
+	tlsConfig := spiffe.ServerTLSConfig(serverCert, ca.Pool)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.TLS = tlsConfig
+	srv.EnableHTTP2 = true
+	// Mirror server.AttachWorkload: HTTP/2 only (NextProtos=["h2"] is not
+	// sufficient on its own — Protocols must disable HTTP/1.1).
+	protocols := &http.Protocols{}
+	protocols.SetHTTP2(true)
+	srv.Config.Protocols = protocols
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	// Supervisor client cert, but the client forces HTTP/1.1 ALPN only.
+	leaf, err := ca.Leaf(testca.LeafOpts{SPIFFEID: wlSupervisorID})
+	require.NoError(t, err)
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs:      ca.Pool,
+			ServerName:   "localhost",
+			Certificates: []tls.Certificate{leaf},
+			NextProtos:   []string{"http/1.1"}, // no h2
+			MinVersion:   tls.VersionTLS12,
+		},
+		// ForceAttemptHTTP2 is intentionally false: this client speaks HTTP/1.1.
+	}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions",
+		bytes.NewReader([]byte(`{"model":"qwen3-27b","messages":[]}`)))
+	_, err = client.Do(req)
+	require.Error(t, err, "an HTTP/1.1 mTLS request must be rejected on the HTTP/2-only workload listener")
+}

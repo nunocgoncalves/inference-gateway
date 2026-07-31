@@ -217,3 +217,76 @@ func TestLogging_RequestIDFromContext(t *testing.T) {
 	m := parseLogLine(t, &buf)
 	assert.Equal(t, "test-request-id-42", m["request_id"])
 }
+
+// On the workload (mTLS) path, the completion log must carry run/turn/pool so
+// outcomes and denials remain attributable to the run (SCN-009). WorkloadAuth
+// propagates its context by mutating r in place; this test mirrors that.
+func TestLogging_IncludesWorkloadScope(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newBufferLogger(&buf)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wc := WorkloadContext{PoolID: "p1", PoolKey: "default/pool-1", RunID: "run-9", TurnID: "turn-9", AssignedModel: "qwen3-27b"}
+		ctx := WithWorkloadContext(r.Context(), wc)
+		ctx = WithIdentityID(ctx, "id-7")
+		*r = *r.WithContext(ctx)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := Logging(logger)(inner)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	m := parseLogLine(t, &buf)
+	assert.Equal(t, "run-9", m["run_id"])
+	assert.Equal(t, "turn-9", m["turn_id"])
+	assert.Equal(t, "default/pool-1", m["pool_key"])
+	assert.Equal(t, "id-7", m["identity_id"])
+	assert.Equal(t, "completed", m["disposition"])
+}
+
+// A canceled workload stream writes HTTP 200 before the client cancels; the
+// completion log must still report a "canceled" disposition rather than
+// looking successful (HOR-398: cancellation reports an attributable outcome).
+func TestLogging_CanceledStreamDisposition(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newBufferLogger(&buf)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := Logging(logger)(inner)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	cancel()
+	handler.ServeHTTP(rec, req)
+
+	m := parseLogLine(t, &buf)
+	assert.Equal(t, "canceled", m["disposition"])
+}
+
+func TestLogging_DispositionByStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   string
+	}{
+		{http.StatusOK, "completed"},
+		{http.StatusForbidden, "denied"},
+		{http.StatusBadGateway, "error"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := newBufferLogger(&buf)
+			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status) })
+			Logging(logger)(inner).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+			m := parseLogLine(t, &buf)
+			assert.Equal(t, tc.want, m["disposition"])
+		})
+	}
+}

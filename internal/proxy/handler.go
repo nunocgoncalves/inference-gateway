@@ -81,7 +81,11 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	md := &middleware.MetricsData{Model: req.Model, Streaming: req.Stream}
 	ctx := middleware.SetMetricsData(r.Context(), md)
-	r = r.WithContext(ctx)
+	// Mutate r in place so outer middleware (Logging/Metrics) observe the
+	// MetricsData when the request completes — a local reassignment would only
+	// flow downstream and the completion log/metrics would miss model/streaming
+	// (and, on the workload path, the run/turn outcome attribution).
+	*r = *r.WithContext(ctx)
 
 	// Capability check: broad-default wildcard allows all; model access is a
 	// capability resource "model:<alias>" / "model:*" (v1 broad-default = all).

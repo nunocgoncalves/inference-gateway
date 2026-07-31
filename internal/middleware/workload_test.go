@@ -162,3 +162,29 @@ func TestWorkloadAuth_TurnScopeDenied(t *testing.T) {
 	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
+
+// An infrastructure failure (DB outage) during pool/turn resolution must be
+// reported as 503, not 403 — fail closed, but not mislabeled as an
+// authorization denial (AGENTS.md: infra failures surface as 502/503).
+func TestWorkloadAuth_PoolInfrastructureError_503(t *testing.T) {
+	store := &fakeStore{poolErr: workload.ErrInfrastructure}
+	h := WorkloadAuth(store, spiffe.DefaultTrustDomain, slog.Default())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called")
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func TestWorkloadAuth_TurnInfrastructureError_503(t *testing.T) {
+	store := &fakeStore{
+		pool:    workload.Pool{ID: "pool-1", SpiffeIDPrefix: "spiffe://iterabase.local/pools/pool-1/"},
+		turnErr: workload.ErrInfrastructure,
+	}
+	h := WorkloadAuth(store, spiffe.DefaultTrustDomain, slog.Default())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called")
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}

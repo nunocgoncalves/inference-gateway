@@ -86,12 +86,14 @@ func TestResolveTurnScope_OK(t *testing.T) {
 	assert.Equal(t, scopeID, ts.ScopeIdentityID)
 }
 
-func TestResolveTurnScope_PendingIsActive(t *testing.T) {
+func TestResolveTurnScope_PendingDenied(t *testing.T) {
 	ctx := context.Background()
 	store, pool := setupStore(t)
 	poolID, runID, turnID, _ := seed(t, ctx, pool, "spiffe://iterabase.local/pools/pool-1/", "qwen3-27b", "pending")
+	// A pending turn has not been dispatched to a worker — no worker is yet
+	// authorized to open inference for it, so it must be denied (HOR-398).
 	_, err := store.ResolveTurnScope(ctx, poolID, runID, turnID)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrScopeDenied)
 }
 
 func TestResolveTurnScope_TerminalDenied(t *testing.T) {

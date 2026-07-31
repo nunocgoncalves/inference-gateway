@@ -76,6 +76,12 @@ func (s *Server) AttachWorkload(cfg *config.Config, deps *Deps, tlsConfig *tls.C
 		return
 	}
 	router := newWorkloadRouter(s.logger, s.metrics, deps)
+	// HTTP/2 only — explicitly disable HTTP/1.1. Setting NextProtos=["h2"]
+	// alone is NOT sufficient: with Protocols nil, Go still serves HTTP/1.1 to a
+	// TLS client that sends no ALPN. ARCH-006 requires the workload listener to
+	// be HTTP/2-only, so a non-h2 client must be rejected.
+	protocols := &http.Protocols{}
+	protocols.SetHTTP2(true)
 	s.workloadServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Workload.Port),
 		Handler:      router,
@@ -83,6 +89,7 @@ func (s *Server) AttachWorkload(cfg *config.Config, deps *Deps, tlsConfig *tls.C
 		ReadTimeout:  cfg.Workload.ReadTimeout,
 		WriteTimeout: cfg.Workload.WriteTimeout,
 		IdleTimeout:  cfg.Workload.IdleTimeout,
+		Protocols:    protocols,
 	}
 }
 

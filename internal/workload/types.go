@@ -22,7 +22,7 @@ type Pool struct {
 
 // TurnScope is the durable resolution of a supervisor/turn caller. The
 // supervisor's pool (resolved from the verified SPIFFE id) is cross-checked:
-// the supplied run_id + turn_id must match an active turn whose run is durably
+// the supplied run_id + turn_id must match a running turn whose run is durably
 // assigned to that same pool. Fail closed otherwise (ARCH-004). AssignedModel
 // is runtime.turns.model — the gateway denies a request whose body model does
 // not match it (ARCH-010: deny model-mismatched assignments). ScopeIdentityID

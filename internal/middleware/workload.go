@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -53,7 +54,9 @@ func WorkloadContextFromContext(ctx context.Context) (WorkloadContext, bool) {
 // both the effective identity (via WithIdentityID, so the existing proxy
 // capability/usage/rate-limit pipeline works unchanged) and the WorkloadContext
 // (for the model-mismatch check). Any failure is 403 with an OpenAI-compatible
-// error; no fallback (REQ-010/SCN-009).
+// error; no fallback (REQ-010/SCN-009). An infrastructure failure (DB outage)
+// is reported as 503 — fail closed, but not mislabeled as an authorization
+// denial (AGENTS.md).
 func WorkloadAuth(store workload.Store, trustDomain string, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +67,11 @@ func WorkloadAuth(store workload.Store, trustDomain string, logger *slog.Logger)
 			}
 			pool, err := store.ResolvePoolBySpiffePrefix(r.Context(), id.SPIFFEID)
 			if err != nil {
+				if errors.Is(err, workload.ErrInfrastructure) {
+					logger.Error("workload auth: infrastructure error resolving pool", "spiffe_id", id.SPIFFEID, "error", err)
+					writeWorkloadError(w, http.StatusServiceUnavailable, "workload scope temporarily unavailable", "scope_unavailable")
+					return
+				}
 				logger.Warn("workload auth: pool not resolved", "spiffe_id", id.SPIFFEID, "error", err)
 				writeWorkloadError(w, http.StatusForbidden, "workload identity not bound to an active pool", "pool_not_authorized")
 				return
@@ -76,6 +84,12 @@ func WorkloadAuth(store workload.Store, trustDomain string, logger *slog.Logger)
 			}
 			ts, err := store.ResolveTurnScope(r.Context(), pool.ID, runID, turnID)
 			if err != nil {
+				if errors.Is(err, workload.ErrInfrastructure) {
+					logger.Error("workload auth: infrastructure error resolving turn scope",
+						"spiffe_id", id.SPIFFEID, "pool", pool.Key, "run_id", runID, "turn_id", turnID, "error", err)
+					writeWorkloadError(w, http.StatusServiceUnavailable, "workload scope temporarily unavailable", "scope_unavailable")
+					return
+				}
 				logger.Warn("workload auth: turn scope denied",
 					"spiffe_id", id.SPIFFEID, "pool", pool.Key, "run_id", runID, "turn_id", turnID, "error", err)
 				writeWorkloadError(w, http.StatusForbidden, "turn not active or not assigned to this pool", "turn_not_authorized")
@@ -94,7 +108,12 @@ func WorkloadAuth(store workload.Store, trustDomain string, logger *slog.Logger)
 			// rate-limit pipeline (keyed on IdentityIDFromContext) serves the
 			// workload path unchanged.
 			ctx = WithIdentityID(ctx, ts.ScopeIdentityID)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			// Mutate r in place so outer middleware (Logging/Metrics) can observe
+			// the resolved workload scope + effective identity when the request
+			// completes — without this, the enriched request only flows downstream
+			// and the completion log would carry no run/turn/identity.
+			*r = *r.WithContext(ctx)
+			next.ServeHTTP(w, r)
 		})
 	}
 }

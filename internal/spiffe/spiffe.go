@@ -76,10 +76,12 @@ func IdentityFromCerts(certs []*x509.Certificate, trustDomain string) (Identity,
 		return Identity{}, errors.New("spiffe: no peer certificate")
 	}
 	leaf := certs[0]
-	if len(leaf.URIs) == 0 {
-		return Identity{}, errors.New("spiffe: peer certificate has no URI SAN")
+	if len(leaf.URIs) != 1 {
+		// A SPIFFE X.509-SVID must carry exactly one URI SAN. A certificate with
+		// zero, or more than one (ambiguous identity), is denied (HOR-398: invalid
+		// cert SAN is denied).
+		return Identity{}, fmt.Errorf("spiffe: peer certificate must have exactly one URI SAN, got %d", len(leaf.URIs))
 	}
-	// A SPIFFE id is a single URI SAN; use the first.
 	id, err := Parse(leaf.URIs[0].String(), trustDomain)
 	if err != nil {
 		return Identity{}, err
@@ -99,6 +101,11 @@ func IdentityFromConnState(cs *tls.ConnectionState, trustDomain string) (Identit
 // path into a typed Identity. Only supervisor ids are recognized; anything
 // else returns KindUnknown (the inference gateway accepts only supervisor
 // model callers — ARCH-010).
+//
+// A SPIFFE id is a strict URI of the form spiffe://<trust-domain>/<path> with
+// no userinfo, port, query, or fragment (SPIFFE spec §2). Malformed ids are
+// rejected so a cert carrying a valid-looking first URI plus extra URI
+// components cannot be treated as a valid supervisor identity.
 func Parse(spiffeID string, trustDomain string) (Identity, error) {
 	if trustDomain == "" {
 		trustDomain = DefaultTrustDomain
@@ -112,6 +119,24 @@ func Parse(spiffeID string, trustDomain string) (Identity, error) {
 	}
 	if u.Host != trustDomain {
 		return Identity{}, fmt.Errorf("spiffe: trust domain mismatch: id %q != %q", u.Host, trustDomain)
+	}
+	// Reject URI components that are not valid in a SPIFFE id. userinfo/port/
+	// query/fragment would let a caller smuggle extra identity-shaped bytes past
+	// a path-only check.
+	if u.User != nil {
+		return Identity{}, fmt.Errorf("spiffe: id %q must not contain userinfo", spiffeID)
+	}
+	if u.Port() != "" {
+		return Identity{}, fmt.Errorf("spiffe: id %q must not contain a port", spiffeID)
+	}
+	if u.RawQuery != "" {
+		return Identity{}, fmt.Errorf("spiffe: id %q must not contain a query", spiffeID)
+	}
+	if u.Fragment != "" {
+		return Identity{}, fmt.Errorf("spiffe: id %q must not contain a fragment", spiffeID)
+	}
+	if u.Opaque != "" {
+		return Identity{}, fmt.Errorf("spiffe: id %q must not be opaque", spiffeID)
 	}
 	id := Identity{SPIFFEID: spiffeID, TrustDomain: u.Host}
 	segments := splitPath(u.Path)

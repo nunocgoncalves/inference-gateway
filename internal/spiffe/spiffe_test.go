@@ -2,7 +2,9 @@ package spiffe
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +46,25 @@ func TestParse_NotSPIFFE(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a spiffe:// URI")
 }
 
+// A SPIFFE id must not carry userinfo, port, query, or fragment — these would
+// let a caller smuggle extra identity-shaped bytes past a path-only check
+// (HOR-398: invalid cert SAN is denied).
+func TestParse_RejectsMalformedSyntax(t *testing.T) {
+	cases := map[string]string{
+		"userinfo": "spiffe://user@iterabase.local/pools/pool-1/workers/pod-abc",
+		"port":     "spiffe://iterabase.local:8080/pools/pool-1/workers/pod-abc",
+		"query":    "spiffe://iterabase.local/pools/pool-1/workers/pod-abc?x=1",
+		"fragment": "spiffe://iterabase.local/pools/pool-1/workers/pod-abc#frag",
+		"opaque":   "spiffe:iterabase.local/pools/pool-1/workers/pod-abc",
+	}
+	for name, id := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse(id, DefaultTrustDomain)
+			require.Error(t, err, "id %q must be rejected", id)
+		})
+	}
+}
+
 func TestIdentityFromConnState_NoTLS(t *testing.T) {
 	_, err := IdentityFromConnState(nil, DefaultTrustDomain)
 	require.Error(t, err)
@@ -52,6 +73,17 @@ func TestIdentityFromConnState_NoTLS(t *testing.T) {
 func TestIdentityFromCerts_Empty(t *testing.T) {
 	_, err := IdentityFromCerts(nil, DefaultTrustDomain)
 	require.Error(t, err)
+}
+
+// A SPIFFE X.509-SVID must carry exactly one URI SAN. A cert with multiple
+// URI SANs is ambiguous identity and must be denied (HOR-398).
+func TestIdentityFromCerts_MultipleURIsRejected(t *testing.T) {
+	uri1, _ := url.Parse("spiffe://iterabase.local/pools/pool-1/workers/pod-abc")
+	uri2, _ := url.Parse("spiffe://iterabase.local/pools/pool-2/workers/pod-xyz")
+	leaf := &x509.Certificate{URIs: []*url.URL{uri1, uri2}}
+	_, err := IdentityFromCerts([]*x509.Certificate{leaf}, DefaultTrustDomain)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one URI SAN")
 }
 
 func TestServerTLSConfig_H2Only(t *testing.T) {
