@@ -16,6 +16,7 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth"`
 	Snapshot SnapshotConfig `yaml:"snapshot"`
 	Logging  LoggingConfig  `yaml:"logging"`
+	Workload WorkloadConfig `yaml:"workload"`
 }
 
 type ServerConfig struct {
@@ -51,6 +52,25 @@ type SnapshotConfig struct {
 type LoggingConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
+}
+
+// WorkloadConfig configures the supervisor mTLS workload listener (HOR-398;
+// ARCH-010/011). When Enabled, a second HTTP/2 mTLS server listens on Port
+// and accepts only supervisor callers whose SPIFFE-bound workload identity +
+// active durable turn context validate against control-plane state. The
+// existing API-key listener is unaffected (separate policy path).
+// ServerCertFile/ServerKeyFile are the gateway's serving cert; ClientCAFile is
+// the workload trust bundle (SPIFFE CA) used to verify client certs.
+type WorkloadConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	Port           int           `yaml:"port"`
+	TrustDomain    string        `yaml:"trust_domain"`
+	ServerCertFile string        `yaml:"server_cert_file"`
+	ServerKeyFile  string        `yaml:"server_key_file"`
+	ClientCAFile   string        `yaml:"client_ca_file"`
+	ReadTimeout    time.Duration `yaml:"read_timeout"`
+	WriteTimeout   time.Duration `yaml:"write_timeout"`
+	IdleTimeout    time.Duration `yaml:"idle_timeout"`
 }
 
 // Load reads the configuration from a YAML file and applies environment
@@ -99,6 +119,13 @@ func defaults() *Config {
 			Level:  "info",
 			Format: "json",
 		},
+		Workload: WorkloadConfig{
+			Port:         8443,
+			TrustDomain:  "iterabase.local",
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 300 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		},
 	}
 }
 
@@ -129,6 +156,34 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("LOG_FORMAT"); v != "" {
 		cfg.Logging.Format = v
 	}
+	applyWorkloadEnvOverrides(cfg)
+}
+
+// applyWorkloadEnvOverrides applies the supervisor mTLS listener env overrides
+// (HOR-398). Extracted from applyEnvOverrides to keep cyclomatic complexity
+// under the lint ceiling.
+func applyWorkloadEnvOverrides(cfg *Config) {
+	if v := os.Getenv("WORKLOAD_ENABLED"); v != "" {
+		cfg.Workload.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("WORKLOAD_PORT"); v != "" {
+		var p int
+		if _, err := fmt.Sscanf(v, "%d", &p); err == nil {
+			cfg.Workload.Port = p
+		}
+	}
+	if v := os.Getenv("WORKLOAD_TRUST_DOMAIN"); v != "" {
+		cfg.Workload.TrustDomain = v
+	}
+	if v := os.Getenv("WORKLOAD_SERVER_CERT_FILE"); v != "" {
+		cfg.Workload.ServerCertFile = v
+	}
+	if v := os.Getenv("WORKLOAD_SERVER_KEY_FILE"); v != "" {
+		cfg.Workload.ServerKeyFile = v
+	}
+	if v := os.Getenv("WORKLOAD_CLIENT_CA_FILE"); v != "" {
+		cfg.Workload.ClientCAFile = v
+	}
 }
 
 func validate(cfg *Config) error {
@@ -140,6 +195,17 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Server.Port < 1 || cfg.Server.Port > 65535 {
 		return fmt.Errorf("server.port must be between 1 and 65535")
+	}
+	if cfg.Workload.Enabled {
+		if cfg.Workload.Port < 1 || cfg.Workload.Port > 65535 {
+			return fmt.Errorf("workload.port must be between 1 and 65535")
+		}
+		if cfg.Workload.ServerCertFile == "" || cfg.Workload.ServerKeyFile == "" || cfg.Workload.ClientCAFile == "" {
+			return fmt.Errorf("workload.server_cert_file, server_key_file, and client_ca_file are required when workload is enabled")
+		}
+		if cfg.Workload.Port == cfg.Server.Port {
+			return fmt.Errorf("workload.port must differ from server.port")
+		}
 	}
 	return nil
 }

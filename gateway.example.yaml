@@ -30,6 +30,23 @@ snapshot:
   refresh_interval: 30s     # Poll fallback (LISTEN/NOTIFY drives prompt updates)
   readiness_staleness: 60s  # /readyz is unhealthy if the snapshot is older than this
 
+# Supervisor mTLS workload listener (HOR-398; ARCH-010/011). When enabled, a
+# second HTTP/2 mTLS server accepts supervisor model callers whose SPIFFE
+# workload identity + active durable turn context validate against
+# control-plane state. The existing API-key listener is unaffected (separate
+# policy path). Disabled by default; enable only after the workload trust
+# bundle (SPIFFE CA) and a gateway serving cert are materialized.
+workload:
+  enabled: false
+  port: 8443
+  trust_domain: "iterabase.local"
+  server_cert_file: "${WORKLOAD_SERVER_CERT_FILE}"   # PEM serving cert
+  server_key_file:  "${WORKLOAD_SERVER_KEY_FILE}"    # PEM serving key
+  client_ca_file:   "${WORKLOAD_CLIENT_CA_FILE}"     # SPIFFE CA bundle (client cert trust)
+  read_timeout:  30s
+  write_timeout: 300s       # Long timeout for streaming responses
+  idle_timeout:  120s
+
 logging:
   level: info               # debug, info, warn, error
   format: json              # json or text

@@ -66,6 +66,19 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	identityID := middleware.IdentityIDFromContext(r.Context())
 
+	// Workload (supervisor mTLS) path: the requested model must equal the
+	// turn's durably-assigned model — deny model-mismatched assignments without
+	// fallback (ARCH-010/REQ-010). The API-key path has no WorkloadContext and
+	// skips this check, relying on capability authorization below.
+	if wc, ok := middleware.WorkloadContextFromContext(r.Context()); ok {
+		if req.Model != wc.AssignedModel {
+			writeError(w, http.StatusForbidden,
+				fmt.Sprintf("requested model '%s' does not match the assigned model for this turn", req.Model),
+				"model_mismatch")
+			return
+		}
+	}
+
 	md := &middleware.MetricsData{Model: req.Model, Streaming: req.Stream}
 	ctx := middleware.SetMetricsData(r.Context(), md)
 	r = r.WithContext(ctx)

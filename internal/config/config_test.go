@@ -107,3 +107,52 @@ func TestLoad_RedisTLSEnvOverride(t *testing.T) {
 	assert.Equal(t, "/etc/iterabase/internal-ca/ca.crt", cfg.Redis.CAFile)
 	assert.Equal(t, "rediss://redis:6379/0", cfg.Redis.URL)
 }
+
+func TestDefaults_Workload(t *testing.T) {
+	cfg := defaults()
+	assert.False(t, cfg.Workload.Enabled) // disabled by default
+	assert.Equal(t, 8443, cfg.Workload.Port)
+	assert.Equal(t, "iterabase.local", cfg.Workload.TrustDomain)
+}
+
+func TestLoad_WorkloadEnabledRequiresCerts(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("WORKLOAD_ENABLED", "true")
+	// No cert paths -> validation error.
+	_, err := Load("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workload.server_cert_file")
+}
+
+func TestLoad_WorkloadEnvOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("WORKLOAD_ENABLED", "true")
+	t.Setenv("WORKLOAD_PORT", "9443")
+	t.Setenv("WORKLOAD_TRUST_DOMAIN", "cluster.example")
+	t.Setenv("WORKLOAD_SERVER_CERT_FILE", "/certs/srv.crt")
+	t.Setenv("WORKLOAD_SERVER_KEY_FILE", "/certs/srv.key")
+	t.Setenv("WORKLOAD_CLIENT_CA_FILE", "/certs/ca.crt")
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.True(t, cfg.Workload.Enabled)
+	assert.Equal(t, 9443, cfg.Workload.Port)
+	assert.Equal(t, "cluster.example", cfg.Workload.TrustDomain)
+	assert.Equal(t, "/certs/ca.crt", cfg.Workload.ClientCAFile)
+}
+
+func TestLoad_WorkloadPortMustDiffer(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/test")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("WORKLOAD_ENABLED", "true")
+	t.Setenv("WORKLOAD_PORT", "8080") // same as server.port
+	t.Setenv("WORKLOAD_SERVER_CERT_FILE", "/certs/srv.crt")
+	t.Setenv("WORKLOAD_SERVER_KEY_FILE", "/certs/srv.key")
+	t.Setenv("WORKLOAD_CLIENT_CA_FILE", "/certs/ca.crt")
+
+	_, err := Load("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must differ from server.port")
+}

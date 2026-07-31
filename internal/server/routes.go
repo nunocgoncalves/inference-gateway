@@ -74,6 +74,31 @@ func newRouter(logger *slog.Logger, m *metrics.Metrics, deps *Deps) http.Handler
 	return r
 }
 
+// newWorkloadRouter wires the supervisor mTLS path (HOR-398; ARCH-010/011).
+// It reuses the existing proxy handler + streaming pipeline behind the
+// WorkloadAuth middleware, which resolves the SPIFFE identity + active durable
+// turn scope and stamps the effective identity (so capability/usage/rate-limit
+// logic is shared with the API-key path). The model-mismatch denial is applied
+// in the proxy handler via WorkloadContextFromContext. No admin/snapshot routes
+// are exposed on this listener.
+func newWorkloadRouter(logger *slog.Logger, m *metrics.Metrics, deps *Deps) http.Handler {
+	r := chi.NewRouter()
+	r.Use(chimiddleware.Recoverer)
+	r.Use(chimiddleware.RealIP)
+	r.Use(gatewaymw.RequestID)
+	r.Use(gatewaymw.Logging(logger))
+	r.Use(gatewaymw.WorkloadAuth(deps.WorkloadStore, deps.TrustDomain, logger))
+	if deps.Limiter != nil {
+		r.Use(gatewaymw.RateLimit(deps.Cache, deps.Limiter, m, logger))
+	}
+	if m != nil {
+		r.Use(gatewaymw.Metrics(m))
+	}
+	r.Get("/v1/models", deps.ProxyHandler.ListModels)
+	r.Post("/v1/chat/completions", deps.ProxyHandler.ChatCompletions)
+	return r
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

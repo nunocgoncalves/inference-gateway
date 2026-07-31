@@ -24,11 +24,16 @@ Postgres.
 ## Architecture
 
 ```
-Clients ──> [ Auth: API key -> identity ] ──> [ RateLimit: per-identity (Redis) ]
-          ──> [ Route alias -> backend_url + rewrite model + transforms ] ──> vLLM/SGLang
-                                |
-                  snapshot cache (in-memory, per-pod, LISTEN/NOTIFY-synced)
-                                |
+Direct callers (API key)
+  ──> [ Auth: API key -> identity ] ──> [ RateLimit: per-identity (Redis) ]
+      ──> [ Route alias -> backend_url + rewrite model + transforms ] ──> vLLM/SGLang
+
+Supervisor (workload mTLS, HOR-398)            │
+  ──> [ mTLS h2 + SPIFFE ] ──> [ WorkloadAuth: pool + active turn scope ]
+      ──> [ RateLimit: effective identity (Redis) ] ──> same proxy pipeline ──┘
+                                │
+                  snapshot cache (catalog / API keys / capabilities / rate limits)
+                                │
             shared Postgres (control-plane schemas)        Redis (rate-limit counters)
 ```
 
@@ -49,6 +54,17 @@ Clients ──> [ Auth: API key -> identity ] ──> [ RateLimit: per-identity 
 - **Rate limits:** per-identity RPM/TPM (from the snapshot) enforced via a Redis
   sliding window — the only shared state. TPM incremented from response usage.
 - **Redis:** rate-limit counters only.
+- **Supervisor workload path (HOR-398; ARCH-010/011):** a second HTTP/2 mTLS
+  listener (`workload.enabled`) accepts the trusted harness supervisor using
+  its SPIFFE-bound workload identity. `WorkloadAuth` resolves the pool from the
+  verified SPIFFE id and validates the active durable turn (`runtime.turns` +
+  `runtime.run_pool_assignments`, read live on the request path — not cached)
+  against `X-Iterabase-Run-Id` / `X-Iterabase-Turn-Id`. The run's
+  `scope_identity_id` becomes the effective identity (catalogue authz, usage,
+  rate limits reuse the API-key pipeline); the requested model must equal the
+  turn's assigned model (deny model-mismatched). Stale/fenced/inactive/terminal
+  turns are denied without fallback. The disposable child receives no
+  credential — the mTLS cert is held by the supervisor only.
 
 ## Quick start
 
@@ -124,8 +140,10 @@ internal/
   database/                PG connection pool (no migrations — gateway owns no tables)
   snapshot/                control-plane views reader + in-memory LISTEN/NOTIFY cache
   proxy/                   routing + model rewrite + transforms + SSE streaming
-  middleware/              auth (API key -> identity), rate limit, logging, metrics, request ID
+  middleware/              auth (API key -> identity), workload mTLS auth, rate limit, logging, metrics, request ID
   ratelimit/               Redis sliding window (RPM/TPM counters)
-  server/                  HTTP server + routes (/v1, /readyz, /admin/v1/snapshot)
+  server/                  HTTP server + routes (/v1, /readyz, /admin/v1/snapshot); workload mTLS listener
+  spiffe/                  SPIFFE workload-identity parse + mTLS server TLS config (+ testca)
+  workload/                live durable-state resolution (pool + active turn scope)
   metrics/                 Prometheus definitions
 ```

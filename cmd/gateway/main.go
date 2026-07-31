@@ -21,6 +21,8 @@ import (
 	"github.com/nunocgoncalves/inference-gateway/internal/ratelimit"
 	"github.com/nunocgoncalves/inference-gateway/internal/server"
 	"github.com/nunocgoncalves/inference-gateway/internal/snapshot"
+	"github.com/nunocgoncalves/inference-gateway/internal/spiffe"
+	"github.com/nunocgoncalves/inference-gateway/internal/workload"
 )
 
 func main() {
@@ -106,14 +108,30 @@ func runServe() error {
 	// --- Create handlers ---
 	proxyHandler := proxy.NewHandler(cache, limiter, m, logger)
 
-	// --- Create server with all deps ---
-	srv := server.New(cfg, logger, &server.Deps{
+	deps := &server.Deps{
 		ProxyHandler:       proxyHandler,
 		Cache:              cache,
 		Limiter:            limiter,
 		AdminKey:           cfg.Auth.AdminKey,
 		ReadinessStaleness: cfg.Snapshot.ReadinessStaleness,
-	}, m)
+	}
+
+	// --- Create server with all deps ---
+	srv := server.New(cfg, logger, deps, m)
+
+	// --- Supervisor mTLS workload listener (HOR-398; ARCH-010/011) ---
+	// A second HTTP/2 mTLS server that reuses the proxy pipeline behind the
+	// WorkloadAuth middleware. Disabled unless workload.enabled + certs are set.
+	if cfg.Workload.Enabled {
+		tlsCfg, err := buildWorkloadTLSConfig(cfg.Workload, logger)
+		if err != nil {
+			return fmt.Errorf("workload mTLS config: %w", err)
+		}
+		deps.WorkloadStore = workload.NewPGStore(pool)
+		deps.TrustDomain = cfg.Workload.TrustDomain
+		srv.AttachWorkload(cfg, deps, tlsCfg)
+		logger.Info("workload mTLS path enabled", "port", cfg.Workload.Port, "trust_domain", cfg.Workload.TrustDomain)
+	}
 
 	// Start server in a goroutine.
 	errCh := make(chan error, 1)
@@ -135,6 +153,28 @@ func runServe() error {
 		}
 		return nil
 	}
+}
+
+// buildWorkloadTLSConfig loads the gateway's serving cert + the workload
+// (SPIFFE) client-trust bundle and returns an h2 mTLS server TLS config
+// (RequireAndVerifyClientCert). Used by the supervisor workload listener
+// (HOR-398). Cert materialization in production comes from the cluster's
+// workload-identity infrastructure (SPIRE/the AgentPool reconciler); here the
+// gateway only consumes file paths from config.
+func buildWorkloadTLSConfig(cfg config.WorkloadConfig, logger *slog.Logger) (*tls.Config, error) {
+	serverCert, err := tls.LoadX509KeyPair(cfg.ServerCertFile, cfg.ServerKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load workload server cert/key: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.ClientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read workload client CA: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("workload client CA %q contains no certificate", cfg.ClientCAFile)
+	}
+	return spiffe.ServerTLSConfig(serverCert, clientCAs), nil
 }
 
 // redisOptions parses cfg.Redis.URL into go-redis options and, when a CA file
