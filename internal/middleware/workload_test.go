@@ -169,6 +169,22 @@ func TestWorkloadAuth_MissingFencingGeneration(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
+// TestWorkloadAuth_OversizedFencingGeneration: a fencing-generation header
+// value that exceeds the PostgreSQL bigint range (MaxInt64) is rejected as a
+// 403 caller-input denial, not surfaced as a 503 infrastructure failure via
+// pgx's bigint encoding (AGENTS.md reserves 503 for real infra failures).
+func TestWorkloadAuth_OversizedFencingGeneration(t *testing.T) {
+	store := &fakeStore{pool: workload.Pool{ID: "pool-1", SpiffeIDPrefix: "spiffe://iterabase.local/pools/pool-1/"}}
+	h := WorkloadAuth(store, spiffe.DefaultTrustDomain, slog.Default())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called")
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "18446744073709551615"))
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	// The store must never have been reached with an out-of-range generation.
+	assert.Equal(t, uint64(0), store.gotGen)
+}
+
 func TestWorkloadAuth_TurnScopeDenied(t *testing.T) {
 	store := &fakeStore{
 		pool:    workload.Pool{ID: "pool-1", SpiffeIDPrefix: "spiffe://iterabase.local/pools/pool-1/"},

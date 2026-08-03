@@ -94,7 +94,13 @@ func WorkloadAuth(store workload.Store, trustDomain string, logger *slog.Logger)
 				writeWorkloadError(w, http.StatusForbidden, "missing fencing generation", "missing_turn_context")
 				return
 			}
-			fencingGeneration, err := strconv.ParseUint(genStr, 10, 64)
+			// Constrain to 63 bits (MaxInt64): the durable fencing_generation
+			// column is PostgreSQL bigint, so a header value > MaxInt64 cannot
+			// match any row and must be rejected here as a 403 caller-input
+			// denial — otherwise it would pass this check, fail pgx's bigint
+			// encoding in ResolveTurnScope, and surface as ErrInfrastructure/503,
+			// mislabeling bad input as an infrastructure failure (AGENTS.md).
+			fencingGeneration, err := strconv.ParseUint(genStr, 10, 63)
 			if err != nil {
 				writeWorkloadError(w, http.StatusForbidden, "invalid fencing generation", "missing_turn_context")
 				return
