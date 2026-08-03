@@ -6,17 +6,20 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/nunocgoncalves/inference-gateway/internal/spiffe"
 	"github.com/nunocgoncalves/inference-gateway/internal/workload"
 )
 
 // Turn-context headers supplied by the supervisor. These are VALIDATED against
-// durable state, never trusted as scope: the SPIFFE-derived pool + the turn row
-// are the authoritative scope (ARCH-004). Absent/invalid -> 403.
+// durable state, never trusted as scope: the SPIFFE-derived pool + the turn
+// row + the active assignment (worker + generation) are the authoritative
+// scope (ARCH-004/010; HOR-249/DEC-041). Absent/invalid -> 403.
 const (
-	HeaderRunID  = "X-Iterabase-Run-Id"
-	HeaderTurnID = "X-Iterabase-Turn-Id"
+	HeaderRunID             = "X-Iterabase-Run-Id"
+	HeaderTurnID            = "X-Iterabase-Turn-Id"
+	HeaderFencingGeneration = "X-Iterabase-Fencing-Generation"
 )
 
 // workloadCtxKey carries the resolved durable scope for a workload caller.
@@ -82,7 +85,21 @@ func WorkloadAuth(store workload.Store, trustDomain string, logger *slog.Logger)
 				writeWorkloadError(w, http.StatusForbidden, "missing turn context", "missing_turn_context")
 				return
 			}
-			ts, err := store.ResolveTurnScope(r.Context(), pool.ID, runID, turnID)
+			// The supervisor's current Welcome fencing generation (HOR-249/DEC-041).
+			// Parsed from the header and validated against the active assignment's
+			// generation; absent/invalid -> 403 (a fenced/old-generation caller is
+			// denied).
+			genStr := r.Header.Get(HeaderFencingGeneration)
+			if genStr == "" {
+				writeWorkloadError(w, http.StatusForbidden, "missing fencing generation", "missing_turn_context")
+				return
+			}
+			fencingGeneration, err := strconv.ParseUint(genStr, 10, 64)
+			if err != nil {
+				writeWorkloadError(w, http.StatusForbidden, "invalid fencing generation", "missing_turn_context")
+				return
+			}
+			ts, err := store.ResolveTurnScope(r.Context(), pool.ID, runID, turnID, id.WorkerID, fencingGeneration)
 			if err != nil {
 				if errors.Is(err, workload.ErrInfrastructure) {
 					logger.Error("workload auth: infrastructure error resolving turn scope",

@@ -34,9 +34,12 @@ type Store interface {
 	ResolvePoolBySpiffePrefix(ctx context.Context, spiffeID string) (Pool, error)
 	// ResolveTurnScope resolves a supervisor/turn caller against durable
 	// runtime state. The supplied runID + turnID must match a running turn
-	// (dispatched to a worker) whose run is durably assigned to poolID. Returns
-	// the assigned model + effective identity. Fail closed otherwise.
-	ResolveTurnScope(ctx context.Context, poolID, runID, turnID string) (TurnScope, error)
+	// (dispatched to a worker) whose run is durably assigned to poolID AND
+	// whose active assignment is bound to the verified workerID + the caller's
+	// current fencing generation (HOR-249 / DEC-041: a fenced/old-generation
+	// supervisor cert is denied). Returns the assigned model + effective
+	// identity. Fail closed otherwise.
+	ResolveTurnScope(ctx context.Context, poolID, runID, turnID, workerID string, fencingGeneration uint64) (TurnScope, error)
 }
 
 // PGStore implements Store reading the control-plane tables directly from the
@@ -71,20 +74,18 @@ func (s *PGStore) ResolvePoolBySpiffePrefix(ctx context.Context, spiffeID string
 // state. The supplied runID + turnID must match a RUNNING turn (a turn that has
 // been dispatched to a worker — pending turns are NOT accepted, since no worker
 // is yet authorized to open inference for them) whose run is durably assigned
-// to poolID. Returns the assigned model + effective identity. Fail closed
-// otherwise.
+// to poolID AND whose active assignment is bound to the verified workerID +
+// the caller's current fencing generation. Returns the assigned model +
+// effective identity. Fail closed otherwise.
 //
-// NOTE (HOR-398): this binds the turn to the pool resolved from the verified
-// SPIFFE id, but does NOT yet bind to the specific verified worker / fencing
-// generation — run_pool_assignments currently carries only pool_id. The
-// authoritative worker/fencing-generation check is provided by HOR-249 (still
-// Todo); until that durable contract exists, a still-valid supervisor cert
-// from the same pool can open inference for a running turn. Requiring the
-// 'running' state closes the pre-dispatch window but not the same-pool
-// cross-worker window. This same-pool residual is an approved interim rescope
-// (PRD DEC-041, 2026-07-31); it is closed by HOR-249 and is NOT a hard block
-// on HOR-398.
-func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID string) (TurnScope, error) {
+// HOR-249 / DEC-041 (closed): the active-assignment cross-check binds
+// authorization to the specific verified worker (cert SAN pod name) AND the
+// current fencing generation, so a still-valid supervisor cert from a different
+// same-pool worker — or a fenced/old-generation cert — is denied for a running
+// turn. The control-plane dispatch (HOR-249) writes runtime.turn_assignments
+// with (worker_id, fencing_generation, state='active'); this read fails closed
+// when no active row matches.
+func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID, workerID string, fencingGeneration uint64) (TurnScope, error) {
 	// runID + turnID are caller-supplied (headers); validate they are UUIDs
 	// before hitting the DB so a malformed-scope input is a 403 denial, not a
 	// Postgres syntax error that would otherwise be indistinguishable from an
@@ -112,6 +113,24 @@ func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID st
 		// Genuine infrastructure failure (connection loss / timeout / canceled
 		// query) — fail closed as 503, not a 403 denial.
 		return TurnScope{}, fmt.Errorf("%w: resolve turn scope: %v", ErrInfrastructure, err)
+	}
+	// Active-assignment cross-check (HOR-249 / DEC-041): the turn's active
+	// assignment must be bound to this verified worker AND the caller's current
+	// fencing generation. A fenced/terminal assignment (no active row), a
+	// different same-pool worker, or an old-generation caller is denied.
+	var assignedWorker string
+	var assignedGen uint64
+	err = s.pool.QueryRow(ctx, `
+		SELECT worker_id, fencing_generation FROM runtime.turn_assignments
+		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).Scan(&assignedWorker, &assignedGen)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TurnScope{}, ErrScopeDenied
+		}
+		return TurnScope{}, fmt.Errorf("%w: resolve turn assignment: %v", ErrInfrastructure, err)
+	}
+	if assignedWorker != workerID || assignedGen != fencingGeneration {
+		return TurnScope{}, ErrScopeDenied
 	}
 	return ts, nil
 }

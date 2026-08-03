@@ -27,6 +27,8 @@ type fakeStore struct {
 	gotPoolID string
 	gotRunID  string
 	gotTurnID string
+	gotWorker string
+	gotGen    uint64
 }
 
 func (f *fakeStore) ResolvePoolBySpiffePrefix(_ context.Context, spiffeID string) (workload.Pool, error) {
@@ -34,8 +36,8 @@ func (f *fakeStore) ResolvePoolBySpiffePrefix(_ context.Context, spiffeID string
 	return f.pool, f.poolErr
 }
 
-func (f *fakeStore) ResolveTurnScope(_ context.Context, poolID, runID, turnID string) (workload.TurnScope, error) {
-	f.gotPoolID, f.gotRunID, f.gotTurnID = poolID, runID, turnID
+func (f *fakeStore) ResolveTurnScope(_ context.Context, poolID, runID, turnID, workerID string, fencingGeneration uint64) (workload.TurnScope, error) {
+	f.gotPoolID, f.gotRunID, f.gotTurnID, f.gotWorker, f.gotGen = poolID, runID, turnID, workerID, fencingGeneration
 	return f.turn, f.turnErr
 }
 
@@ -52,7 +54,7 @@ func mintSupervisorLeaf(t *testing.T, spiffeID string) *x509.Certificate {
 	return parsed
 }
 
-func newWorkloadRequest(t *testing.T, spiffeID, runID, turnID string) *http.Request {
+func newWorkloadRequest(t *testing.T, spiffeID, runID, turnID, gen string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	if spiffeID != "" {
@@ -63,6 +65,9 @@ func newWorkloadRequest(t *testing.T, spiffeID, runID, turnID string) *http.Requ
 	}
 	if turnID != "" {
 		req.Header.Set(HeaderTurnID, turnID)
+	}
+	if gen != "" {
+		req.Header.Set(HeaderFencingGeneration, gen)
 	}
 	return req
 }
@@ -88,14 +93,16 @@ func TestWorkloadAuth_OK(t *testing.T) {
 	}))
 
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "1"))
 	assert.True(t, called)
 	assert.Equal(t, http.StatusOK, rr.Code)
-	// The store received the validated ids.
+	// The store received the validated ids + the verified worker + generation.
 	assert.Equal(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", store.gotSpiffe)
 	assert.Equal(t, "pool-1", store.gotPoolID)
 	assert.Equal(t, "run-1", store.gotRunID)
 	assert.Equal(t, "turn-1", store.gotTurnID)
+	assert.Equal(t, "pod-abc", store.gotWorker)
+	assert.Equal(t, uint64(1), store.gotGen)
 }
 
 func TestWorkloadAuth_NoMTLS(t *testing.T) {
@@ -115,7 +122,7 @@ func TestWorkloadAuth_NonSupervisorSAN(t *testing.T) {
 		t.Fatal("handler must not be called")
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/tool-runners/default/r1", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/tool-runners/default/r1", "run-1", "turn-1", "1"))
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
@@ -125,7 +132,7 @@ func TestWorkloadAuth_TrustDomainMismatch(t *testing.T) {
 		t.Fatal("handler must not be called")
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://evil.example/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://evil.example/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "1"))
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
@@ -135,7 +142,7 @@ func TestWorkloadAuth_PoolNotResolved(t *testing.T) {
 		t.Fatal("handler must not be called")
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "1"))
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
@@ -146,7 +153,19 @@ func TestWorkloadAuth_MissingTurnContext(t *testing.T) {
 	}))
 	rr := httptest.NewRecorder()
 	// No run/turn headers.
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "", ""))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "", "", "1"))
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+}
+
+// TestWorkloadAuth_MissingFencingGeneration: a request without the fencing-
+// generation header is denied (HOR-249/DEC-041).
+func TestWorkloadAuth_MissingFencingGeneration(t *testing.T) {
+	store := &fakeStore{pool: workload.Pool{ID: "pool-1", SpiffeIDPrefix: "spiffe://iterabase.local/pools/pool-1/"}}
+	h := WorkloadAuth(store, spiffe.DefaultTrustDomain, slog.Default())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called")
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", ""))
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
@@ -159,7 +178,7 @@ func TestWorkloadAuth_TurnScopeDenied(t *testing.T) {
 		t.Fatal("handler must not be called")
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "1"))
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
@@ -172,7 +191,7 @@ func TestWorkloadAuth_PoolInfrastructureError_503(t *testing.T) {
 		t.Fatal("handler must not be called")
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "1"))
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
@@ -185,6 +204,6 @@ func TestWorkloadAuth_TurnInfrastructureError_503(t *testing.T) {
 		t.Fatal("handler must not be called")
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1"))
+	h.ServeHTTP(rr, newWorkloadRequest(t, "spiffe://iterabase.local/pools/pool-1/workers/pod-abc", "run-1", "turn-1", "1"))
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }

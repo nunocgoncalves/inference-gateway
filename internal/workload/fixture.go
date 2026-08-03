@@ -53,4 +53,25 @@ CREATE TABLE runtime.run_pool_assignments (
     pool_id     uuid NOT NULL,
     assigned_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE runtime.turn_assignments (
+    turn_id                uuid PRIMARY KEY,
+    run_id                 uuid NOT NULL REFERENCES runtime.workflow_runs(id) ON DELETE CASCADE,
+    pool_id                uuid NOT NULL,
+    worker_id              text NOT NULL,
+    fencing_generation     bigint NOT NULL,
+    attempt_id             text NOT NULL,
+    scope_identity_id      uuid NOT NULL,
+    agent_pool_key         text NOT NULL,
+    model_permission       jsonb NOT NULL DEFAULT '{}'::jsonb,
+    capability_request     jsonb NOT NULL DEFAULT '[]'::jsonb,
+    tool_version_snapshot  jsonb NOT NULL DEFAULT '[]'::jsonb,
+    state                  text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'terminal', 'fenced')),
+    highest_applied_sequence bigint NOT NULL DEFAULT 0,
+    assigned_at            timestamptz NOT NULL DEFAULT now(),
+    terminalized_at        timestamptz,
+    created_at             timestamptz NOT NULL DEFAULT now(),
+    updated_at             timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_turn_assignments_active ON runtime.turn_assignments (turn_id) WHERE state = 'active';
 `

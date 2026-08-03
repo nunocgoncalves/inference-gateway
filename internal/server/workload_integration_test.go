@@ -100,6 +100,18 @@ func wlSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, vllmURL, turn
 		INSERT INTO runtime.turns (run_id, session_id, model, state) VALUES ($1, 'sess-1', $2, $3) RETURNING id::text`,
 		runID, wlModel, turnState).Scan(&turnID))
 
+	// Active assignment bound to worker pod-abc at generation 1 (HOR-249/DEC-041):
+	// the workload path binds authorization to the verified worker + generation.
+	if turnState == "running" {
+		_, err = pool.Exec(ctx, `
+			INSERT INTO runtime.turn_assignments
+			    (turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
+			     scope_identity_id, agent_pool_key, state)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 'pod-abc', 1, $2, $4::uuid, 'pool-1', 'active')`,
+			turnID, runID, poolID, scopeID)
+		require.NoError(t, err)
+	}
+
 	// Catalog: backend + alias (rewrite on so the backend receives the HF id).
 	_, err = pool.Exec(ctx, `
 		INSERT INTO catalog.backends (key, name, namespace, kind, model, service_url, deployed, healthy)
@@ -199,6 +211,7 @@ func TestWorkloadMTLS_ValidActiveTurn_Streams(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", bytes.NewReader([]byte(body)))
 	req.Header.Set(middleware.HeaderRunID, runID)
 	req.Header.Set(middleware.HeaderTurnID, turnID)
+	req.Header.Set(middleware.HeaderFencingGeneration, "1")
 	resp, err := mTLSClient(t, ca, wlSupervisorID).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -242,6 +255,7 @@ func TestWorkloadMTLS_StreamingCancellationClosesBackend(t *testing.T) {
 	req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost, srv.URL+"/v1/chat/completions", bytes.NewReader([]byte(body)))
 	req.Header.Set(middleware.HeaderRunID, runID)
 	req.Header.Set(middleware.HeaderTurnID, turnID)
+	req.Header.Set(middleware.HeaderFencingGeneration, "1")
 
 	client := mTLSClient(t, ca, wlSupervisorID)
 	resp, err := client.Do(req)
@@ -275,6 +289,7 @@ func TestWorkloadMTLS_NonSupervisorSAN_Denied(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", bytes.NewReader([]byte(body)))
 	req.Header.Set(middleware.HeaderRunID, runID)
 	req.Header.Set(middleware.HeaderTurnID, turnID)
+	req.Header.Set(middleware.HeaderFencingGeneration, "1")
 	// A tool-runner SAN: chain verifies, but not a supervisor identity.
 	resp, err := mTLSClient(t, ca, "spiffe://iterabase.local/tool-runners/default/r1").Do(req)
 	require.NoError(t, err)
@@ -308,6 +323,7 @@ func TestWorkloadMTLS_TrustDomainMismatch_Denied(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", bytes.NewReader([]byte(body)))
 	req.Header.Set(middleware.HeaderRunID, runID)
 	req.Header.Set(middleware.HeaderTurnID, turnID)
+	req.Header.Set(middleware.HeaderFencingGeneration, "1")
 	// The chain does not verify against the gateway's ClientCAs -> handshake fails.
 	_, err = client.Do(req)
 	require.Error(t, err, "mTLS handshake must fail for an untrusted client cert")
@@ -331,6 +347,7 @@ func TestWorkloadMTLS_TerminalTurn_Denied(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", bytes.NewReader([]byte(body)))
 	req.Header.Set(middleware.HeaderRunID, runID)
 	req.Header.Set(middleware.HeaderTurnID, turnID)
+	req.Header.Set(middleware.HeaderFencingGeneration, "1")
 	resp, err := mTLSClient(t, ca, wlSupervisorID).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -356,6 +373,7 @@ func TestWorkloadMTLS_ModelMismatch_Denied(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", bytes.NewReader([]byte(body)))
 	req.Header.Set(middleware.HeaderRunID, runID)
 	req.Header.Set(middleware.HeaderTurnID, turnID)
+	req.Header.Set(middleware.HeaderFencingGeneration, "1")
 	resp, err := mTLSClient(t, ca, wlSupervisorID).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
