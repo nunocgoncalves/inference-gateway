@@ -97,15 +97,35 @@ func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID, w
 	if _, err := uuid.Parse(turnID); err != nil {
 		return TurnScope{}, ErrScopeDenied
 	}
+	// One fail-closed join (HOR-249 / DEC-041): the turn, its run-pool
+	// assignment, the workflow run, AND the active turn assignment must ALL be
+	// coherent with the verified request context — turn id + run id + pool +
+	// worker (cert SAN pod name) + current fencing generation — read from a
+	// single snapshot. Selecting the active assignment by turn_id alone and
+	// Go-comparing worker/generation would accept a wrong-pool row that happens
+	// to share a pod name + generation across two unrelated snapshots (worker
+	// ids are pod names scoped to a pool, and the production assignment schema
+	// carries no cross-schema FK for pool_id). Returning the scope from this
+	// single coherent row guarantees the bound identity is the validated one.
+	// A fenced/terminal assignment (no active row), a different same-pool
+	// worker, an old-generation caller, or a run/pool mismatch all yield no row
+	// -> ErrScopeDenied.
 	var ts TurnScope
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.run_id::text, t.id::text, t.state, COALESCE(t.model, ''), wr.scope_identity_id::text
 		FROM runtime.turns t
 		JOIN runtime.run_pool_assignments a ON a.run_id = t.run_id
 		JOIN runtime.workflow_runs wr ON wr.id = t.run_id
+		JOIN runtime.turn_assignments ta ON ta.turn_id = t.id
 		WHERE t.id = $1::uuid AND t.state = 'running'
-		  AND t.run_id::text = $2 AND a.pool_id = $3::uuid`,
-		turnID, runID, poolID).Scan(&ts.RunID, &ts.TurnID, &ts.TurnState, &ts.AssignedModel, &ts.ScopeIdentityID)
+		  AND t.run_id::text = $2
+		  AND a.pool_id = $3::uuid
+		  AND ta.state = 'active'
+		  AND ta.pool_id = a.pool_id
+		  AND ta.worker_id = $4
+		  AND ta.fencing_generation = $5`,
+		turnID, runID, poolID, workerID, fencingGeneration).
+		Scan(&ts.RunID, &ts.TurnID, &ts.TurnState, &ts.AssignedModel, &ts.ScopeIdentityID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TurnScope{}, ErrScopeDenied
@@ -113,24 +133,6 @@ func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID, w
 		// Genuine infrastructure failure (connection loss / timeout / canceled
 		// query) — fail closed as 503, not a 403 denial.
 		return TurnScope{}, fmt.Errorf("%w: resolve turn scope: %v", ErrInfrastructure, err)
-	}
-	// Active-assignment cross-check (HOR-249 / DEC-041): the turn's active
-	// assignment must be bound to this verified worker AND the caller's current
-	// fencing generation. A fenced/terminal assignment (no active row), a
-	// different same-pool worker, or an old-generation caller is denied.
-	var assignedWorker string
-	var assignedGen uint64
-	err = s.pool.QueryRow(ctx, `
-		SELECT worker_id, fencing_generation FROM runtime.turn_assignments
-		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).Scan(&assignedWorker, &assignedGen)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return TurnScope{}, ErrScopeDenied
-		}
-		return TurnScope{}, fmt.Errorf("%w: resolve turn assignment: %v", ErrInfrastructure, err)
-	}
-	if assignedWorker != workerID || assignedGen != fencingGeneration {
-		return TurnScope{}, ErrScopeDenied
 	}
 	return ts, nil
 }

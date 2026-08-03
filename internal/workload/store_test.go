@@ -164,3 +164,35 @@ func TestResolveTurnScope_StaleGenerationDenied(t *testing.T) {
 	_, err := store.ResolveTurnScope(ctx, poolID, runID, turnID, "pod-abc", 2)
 	assert.ErrorIs(t, err, ErrScopeDenied)
 }
+
+// TestResolveTurnScope_PoolInconsistentAssignmentDenied: the active assignment
+// must belong to the SAME pool as the run's run_pool_assignment. A wrong-pool
+// active row that happens to share the verified pod name + generation (read
+// across two unrelated snapshots) must be denied — this is the DEC-041 residual
+// the single fail-closed join closes (worker ids are pod names scoped to a
+// pool; the production assignment schema carries no cross-schema FK for
+// pool_id).
+func TestResolveTurnScope_PoolInconsistentAssignmentDenied(t *testing.T) {
+	ctx := context.Background()
+	store, pool := setupStore(t)
+	poolID, runID, turnID, _ := seed(t, ctx, pool, "spiffe://iterabase.local/pools/pool-1/", "qwen3-27b", "running")
+	// Replace the seeded active assignment with one bound to a DIFFERENT pool
+	// but the same worker (pod-abc) + generation (1). The run is assigned to
+	// poolID; an inconsistent active row for another pool must not authorize.
+	otherPool := "00000000-0000-0000-0000-0000000000aa"
+	_, err := pool.Exec(ctx, `DELETE FROM runtime.turn_assignments WHERE turn_id = $1::uuid`, turnID)
+	require.NoError(t, err)
+	var ident string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT scope_identity_id::text FROM runtime.workflow_runs WHERE id = $1::uuid`, runID).Scan(&ident))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO runtime.turn_assignments
+		    (turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
+		     scope_identity_id, agent_pool_key, state)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'pod-abc', 1, $2, $4::uuid, 'pool-other', 'active')`,
+		turnID, runID, otherPool, ident)
+	require.NoError(t, err)
+	// Verified context is for poolID + pod-abc + gen 1 — the active row is for
+	// another pool, so the single coherent join yields no row -> denied.
+	_, err = store.ResolveTurnScope(ctx, poolID, runID, turnID, "pod-abc", 1)
+	assert.ErrorIs(t, err, ErrScopeDenied)
+}
