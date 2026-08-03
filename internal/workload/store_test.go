@@ -165,6 +165,41 @@ func TestResolveTurnScope_StaleGenerationDenied(t *testing.T) {
 	assert.ErrorIs(t, err, ErrScopeDenied)
 }
 
+// TestResolveTurnScope_RunInconsistentAssignmentDenied: the active
+// assignment's denormalized run_id must equal the turn's (validated) run. An
+// active row that shares the verified pod name + generation + pool but whose
+// run_id disagrees with the turn's run must be denied — this closes the
+// DEC-041 residual alongside the pool cross-check (the production assignment
+// schema carries no cross-schema FK enforcing ta.run_id = turns.run_id).
+func TestResolveTurnScope_RunInconsistentAssignmentDenied(t *testing.T) {
+	ctx := context.Background()
+	store, pool := setupStore(t)
+	poolID, runID, turnID, _ := seed(t, ctx, pool, "spiffe://iterabase.local/pools/pool-1/", "qwen3-27b", "running")
+	// Seed a SECOND workflow_run so the FK on turn_assignments.run_id is
+	// satisfiable while the denormalized run_id still disagrees with the
+	// turn's run (the FK only enforces existence, not coherence with the
+	// turn's run).
+	var otherRun string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO runtime.workflow_runs (kind, scope_identity_id, session_id, session_dir)
+		VALUES ('chat', gen_random_uuid(), 'sess-2', '/tmp/sess2') RETURNING id::text`).Scan(&otherRun))
+	// Replace the seeded active assignment with one whose run_id is the OTHER
+	// run but same pool + worker (pod-abc) + generation (1).
+	_, err := pool.Exec(ctx, `DELETE FROM runtime.turn_assignments WHERE turn_id = $1::uuid`, turnID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO runtime.turn_assignments
+		    (turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
+		     scope_identity_id, agent_pool_key, state)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'pod-abc', 1, $2, gen_random_uuid(), 'pool-1', 'active')`,
+		turnID, otherRun, poolID)
+	require.NoError(t, err)
+	// Verified context is for runID + poolID + pod-abc + gen 1 — the active row
+	// is for another run, so the single coherent join yields no row -> denied.
+	_, err = store.ResolveTurnScope(ctx, poolID, runID, turnID, "pod-abc", 1)
+	assert.ErrorIs(t, err, ErrScopeDenied)
+}
+
 // TestResolveTurnScope_PoolInconsistentAssignmentDenied: the active assignment
 // must belong to the SAME pool as the run's run_pool_assignment. A wrong-pool
 // active row that happens to share the verified pod name + generation (read

@@ -105,11 +105,15 @@ func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID, w
 	// Go-comparing worker/generation would accept a wrong-pool row that happens
 	// to share a pod name + generation across two unrelated snapshots (worker
 	// ids are pod names scoped to a pool, and the production assignment schema
-	// carries no cross-schema FK for pool_id). Returning the scope from this
-	// single coherent row guarantees the bound identity is the validated one.
-	// A fenced/terminal assignment (no active row), a different same-pool
-	// worker, an old-generation caller, or a run/pool mismatch all yield no row
-	// -> ErrScopeDenied.
+	// carries no cross-schema FK for pool_id). The active assignment's
+	// denormalized run_id and pool_id are therefore asserted explicitly against
+	// the validated run + run-pool assignment (ta.run_id = t.run_id,
+	// ta.pool_id = a.pool_id = poolID) so an inconsistent row — same pod name +
+	// generation but a mismatched run or pool — yields no result. Returning the
+	// scope from this single coherent row guarantees the bound identity is the
+	// validated one. A fenced/terminal assignment (no active row), a different
+	// same-pool worker, an old-generation caller, or a run/pool mismatch all
+	// yield no row -> ErrScopeDenied.
 	var ts TurnScope
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.run_id::text, t.id::text, t.state, COALESCE(t.model, ''), wr.scope_identity_id::text
@@ -121,6 +125,7 @@ func (s *PGStore) ResolveTurnScope(ctx context.Context, poolID, runID, turnID, w
 		  AND t.run_id::text = $2
 		  AND a.pool_id = $3::uuid
 		  AND ta.state = 'active'
+		  AND ta.run_id = t.run_id
 		  AND ta.pool_id = a.pool_id
 		  AND ta.worker_id = $4
 		  AND ta.fencing_generation = $5`,
